@@ -383,3 +383,16 @@ func TestFilterSkills(t *testing.T) {
 		t.Errorf("nope: got %v", got)
 	}
 }
+
+func TestServeDancer(t *testing.T) {
+	h := newServeHandler((&stubCheckout{}).checkout)
+	for _, page := range []string{"/", "/cluster"} {
+		_, body := get(t, h, page)
+		if !strings.Contains(body, `<svg class="dancer" viewBox="0 0 200 290" aria-hidden="true"`) {
+			t.Errorf("%s does not show the background dancer", page)
+		}
+		if !strings.Contains(body, "prefers-reduced-motion") {
+			t.Errorf("%s does not stop the dancer for reduced motion", page)
+		}
+	}
+}
