@@ -210,6 +210,7 @@ func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 	mux.HandleFunc("/progress", jobs.serveProgress)
 	mux.HandleFunc("/progress.js", serveProgressJS)
 	mux.HandleFunc("/repos.js", serveReposJS)
+	mux.HandleFunc("/dancer.js", serveDancerJS)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)

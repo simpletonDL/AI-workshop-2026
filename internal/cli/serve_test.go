@@ -386,13 +386,21 @@ func TestFilterSkills(t *testing.T) {
 
 func TestServeDancer(t *testing.T) {
 	h := newServeHandler((&stubCheckout{}).checkout)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/dancer.js", nil))
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/javascript") {
+		t.Fatalf("status = %d, content type %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(rec.Body.String(), "prefers-reduced-motion") {
+		t.Error("dancer script ignores prefers-reduced-motion")
+	}
 	for _, page := range []string{"/", "/cluster"} {
 		_, body := get(t, h, page)
-		if !strings.Contains(body, `<svg class="dancer" viewBox="0 0 200 290" aria-hidden="true"`) {
+		if !strings.Contains(body, `<div class="dancer" aria-hidden="true">`) {
 			t.Errorf("%s does not show the background dancer", page)
 		}
-		if !strings.Contains(body, "prefers-reduced-motion") {
-			t.Errorf("%s does not stop the dancer for reduced motion", page)
+		if !strings.Contains(body, `<script src="/dancer.js"></script>`) {
+			t.Errorf("%s does not include the dancer script", page)
 		}
 	}
 }
