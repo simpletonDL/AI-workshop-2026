@@ -29,6 +29,7 @@
   h1 { margin: 0 0 4px; font-size: 24px; }
   .subtitle { margin: 0 0 24px; color: var(--muted); }
 {{template "repo-css"}}
+{{template "dancer-css"}}
   .hint { color: var(--muted); font-size: 13px; }
   .message { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; overflow-wrap: anywhere; }
   .error { background: var(--error-bg); color: var(--error-text); }
@@ -61,6 +62,7 @@
 </style>
 </head>
 <body>
+{{template "dancer"}}
 <main>
   <h1>Cluster skills</h1>
   <p class="subtitle">Group skills from several repositories by meaning with Claude. <a href="/{{with .Query}}?{{.}}&amp;edit=1{{end}}">&larr; {{if .Query}}Browse these repositories{{else}}Back to atlas{{end}}</a></p>

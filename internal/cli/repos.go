@@ -15,13 +15,18 @@ var repoFormHTML string
 //go:embed repos.js
 var reposJS string
 
+//go:embed dancer.html
+var dancerHTML string
+
 // maxRepos is how many repositories a single request (main page or /cluster)
 // may scan.
 const maxRepos = 10
 
-// pageTemplate parses a page together with the shared repository list form.
+// pageTemplate parses a page together with the shared repository list form
+// and the background dancer.
 func pageTemplate(name, html string) *template.Template {
-	return template.Must(template.Must(template.New(name).Parse(html)).Parse(repoFormHTML))
+	t := template.Must(template.New(name).Parse(html))
+	return template.Must(template.Must(t.Parse(repoFormHTML)).Parse(dancerHTML))
 }
 
 // repoSpec is a repository and an optional branch or tag.

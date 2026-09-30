@@ -29,6 +29,7 @@
   .subtitle { margin: 0 0 24px; color: var(--muted); }
   .subtitle a { color: var(--accent); }
 {{template "repo-css"}}
+{{template "dancer-css"}}
   input[name=filter] { flex: 1 1 200px; }
   .form-foot .primary { margin-left: auto; }
   .message { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; overflow-wrap: anywhere; }
@@ -88,6 +89,7 @@
 </style>
 </head>
 <body>
+{{template "dancer"}}
 <main>
   <h1>atlas</h1>
   <p class="subtitle">Browse Claude Code skills in git repositories. <a href="/cluster{{with .Query}}?{{.}}&amp;edit=1{{end}}">Cluster {{if .Query}}these repositories{{else}}skills of several repositories{{end}} &rarr;</a></p>
