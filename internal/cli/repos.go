@@ -18,6 +18,9 @@ var reposJS string
 //go:embed dancer.html
 var dancerHTML string
 
+//go:embed dancer.js
+var dancerJS string
+
 // maxRepos is how many repositories a single request (main page or /cluster)
 // may scan.
 const maxRepos = 10
@@ -141,4 +144,9 @@ func (v repoFormView) CanAdd() bool { return len(v.Rows) < v.Max }
 func serveReposJS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	_, _ = w.Write([]byte(reposJS))
+}
+
+func serveDancerJS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	_, _ = w.Write([]byte(dancerJS))
 }
