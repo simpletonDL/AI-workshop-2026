@@ -41,8 +41,19 @@ Starts a local web service with a simple browser UI for viewing a repository's s
   - history lives in the server's memory: it is shared by all visitors and lost on restart.
 - **Input:** only remote repository URLs (`https://`, `http://`, `ssh://`, `git://`, `user@host:path`). Unlike the CLI, local paths, `file://` and other transports are rejected, so visitors cannot scan the server's filesystem.
 - **Errors:** clone failures and "no skills found" are shown as messages in the UI.
+- **Skill clustering (`/cluster`):** a separate page (linked from the main page and back) that groups the skills of several repositories by meaning using Claude.
+  - **Form:** a textarea with repositories, one per line: `<url>` or `<url> <ref>`. It is submitted as `GET /cluster?repos=<textarea contents>`, so results can be bookmarked. Works without JavaScript.
+  - **Input:** blank lines are skipped, duplicate lines (same URL + ref) are dropped, at most 10 repositories per request (more → error, nothing is cloned). Each URL goes through the same remote-only validation as the main page.
+  - **Scanning:** repositories are cloned in parallel (same shallow clone as the main page) and their skills are discovered. Per-repository errors (invalid URL or line, clone failure) are listed in the UI and don't stop the other repositories.
+  - **Clustering:** every skill gets an id (`s1`, `s2`, … in repository order, then by name). Only the ids, names and descriptions (truncated to 500 characters) are sent to Claude — no URLs, paths or file contents. Atlas runs `<claude-bin> -p --output-format json` with the prompt on stdin (in the system temp directory), takes the `result` field of the JSON envelope (output that is not an envelope is used as is) and parses the model answer as a JSON array `[{"name", "description", "skills": [<ids>]}]`; the outermost `[...]` is extracted, so markdown fences or surrounding prose are tolerated.
+  - **Validation of the answer:** unknown or non-string ids are ignored; a skill listed in several clusters stays in the first one; clusters left without skills are dropped; a cluster without a name is called "Unnamed cluster"; skills the model left out go into an extra "Other" cluster. So every skill appears in exactly one cluster.
+  - **Output:** cluster cards (name, description, number of skills) with their skills (name, description, repository + ref, path), plus the list of scanned repositories with skill counts.
+  - **Errors (shown in the UI):** `claude` binary not found, non-zero exit, timeout, an error envelope (`is_error`), invalid JSON in the answer. If no skills are found, Claude is not called and "No skills found" is shown.
+  - **Dependency:** requires [Claude Code](https://claude.com/claude-code) (`claude` CLI) installed and authenticated on the server. The rest of the UI works without it.
 - **Flags:**
-  - `--addr <host:port>` — listen address (defaults to `localhost:8080`).
+  - `--addr <host:port>` — listen address (defaults to `localhost:8080`);
+  - `--claude-bin <path>` — Claude Code CLI used by `/cluster` (defaults to `claude`, looked up in `PATH`);
+  - `--claude-timeout <duration>` — timeout of one Claude call (defaults to `3m`).
 
 ## Technical requirements
 - Go 1.22+, CLI built with [cobra](https://github.com/spf13/cobra).
@@ -56,8 +67,8 @@ Starts a local web service with a simple browser UI for viewing a repository's s
   internal/skills/         # SKILL.md discovery and parsing
   test/integration/        # integration tests
   ```
-- Unit tests for skill discovery and parsing, and for the web UI handler (skill text, recent searches, name filter).
-- Integration tests (build tag `integration`, `make test-integration`) check the whole pipeline: they build the `atlas` binary and run it against small real public GitHub repositories (clone → discovery → parsing → output). Both unit and integration tests run in CI (GitHub Actions).
+- Unit tests for skill discovery and parsing, and for the web UI handler (skill text, recent searches, name filter, clustering with a fake Claude runner — unit tests never call the real Claude).
+- Integration tests (build tag `integration`, `make test-integration`) check the whole pipeline: they build the `atlas` binary and run it against small real public GitHub repositories (clone → discovery → parsing → output). The `/cluster` integration tests pass a fake `claude` script via `--claude-bin` that prints a canned JSON envelope, so CI needs neither Claude nor an API key. Both unit and integration tests run in CI (GitHub Actions).
 
 ## Installation
 - `go install github.com/<org>/atlas/cmd/atlas@latest`

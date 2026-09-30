@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cluster skills · atlas</title>
+<style>
+  :root {
+    --bg: #f7f7f8; --surface: #ffffff; --text: #1d1d20; --muted: #6b6b73;
+    --border: #e2e2e6; --accent: #3b5bdb; --accent-text: #ffffff;
+    --error-bg: #fff0f0; --error-text: #b42318; --warn-bg: #fff8e6; --warn-text: #8a5a00;
+    --chip-bg: #f1f1f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141417; --surface: #1d1d21; --text: #ececf0; --muted: #9a9aa5;
+      --border: #2e2e35; --accent: #7c93f5; --accent-text: #0f1020;
+      --error-bg: #3a1a1a; --error-text: #ffb4ab; --warn-bg: #33290f; --warn-text: #f5d58a;
+      --chip-bg: #26262c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  a { color: var(--accent); }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .subtitle { margin: 0 0 24px; color: var(--muted); }
+  form { display: grid; gap: 8px; margin-bottom: 24px; }
+  textarea {
+    padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; resize: vertical;
+    background: var(--surface); color: var(--text); font: 14px/1.5 ui-monospace, Menlo, monospace;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .form-foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  .hint { color: var(--muted); font-size: 13px; }
+  button {
+    padding: 10px 20px; border: 0; border-radius: 8px; cursor: pointer;
+    background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600;
+  }
+  .message { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; overflow-wrap: anywhere; }
+  .error { background: var(--error-bg); color: var(--error-text); }
+  .warnings { background: var(--warn-bg); color: var(--warn-text); }
+  .warnings ul { margin: 4px 0 0; padding-left: 20px; }
+  .empty { background: var(--surface); border: 1px solid var(--border); color: var(--muted); }
+  .summary { color: var(--muted); margin-bottom: 12px; }
+  .repos { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 20px; padding: 0; list-style: none; }
+  .repos li {
+    padding: 5px 12px; border: 1px solid var(--border); border-radius: 999px;
+    background: var(--surface); font-size: 13px; overflow-wrap: anywhere;
+  }
+  .repos .count, .repos .ref { color: var(--muted); }
+  .repos .failed { border-color: var(--error-text); color: var(--error-text); }
+  .clusters { display: grid; gap: 16px; }
+  .cluster { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .cluster h2 { margin: 0; font-size: 18px; }
+  .cluster h2 .count { color: var(--muted); font-size: 13px; font-weight: 400; margin-left: 6px; }
+  .cluster > p { margin: 4px 0 12px; color: var(--muted); }
+  .cluster ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .cluster li { padding: 10px 12px; border-radius: 8px; background: var(--chip-bg); }
+  .cluster h3 { margin: 0; font-size: 15px; }
+  .cluster li p { margin: 4px 0 0; white-space: pre-line; }
+  .meta { margin-top: 6px; color: var(--muted); font: 12px/1.4 ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+  .no-description { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Cluster skills</h1>
+  <p class="subtitle">Group skills from several repositories by meaning with Claude. <a href="/">&larr; Back to atlas</a></p>
+
+  <form method="get" action="/cluster">
+    <textarea name="repos" rows="6" aria-label="Repositories, one per line" placeholder="https://github.com/org/repo&#10;https://github.com/org/other v1.2" required autofocus>{{.Repos}}</textarea>
+    <div class="form-foot">
+      <button type="submit">Cluster skills</button>
+      <span class="hint">One repository per line: <code>&lt;url&gt;</code> or <code>&lt;url&gt; &lt;ref&gt;</code>, at most 10. Clustering may take a minute.</span>
+    </div>
+  </form>
+
+  {{if .Error}}
+  <div class="message error" role="alert">{{.Error}}</div>
+  {{end}}
+
+  {{if .Submitted}}
+    {{with .RepoErrors}}
+    <div class="message warnings">
+      Some repositories could not be scanned:
+      <ul>{{range .}}<li><strong>{{.Repo}}</strong>: {{.Error}}</li>{{end}}</ul>
+    </div>
+    {{end}}
+
+    {{if .Results}}
+    <ul class="repos" aria-label="Repositories">
+      {{range .Results}}
+      <li{{if .Error}} class="failed"{{end}}>
+        <a href="/?repo={{.Repo.URL}}{{if .Repo.Ref}}&amp;ref={{.Repo.Ref}}{{end}}">{{.Repo.URL}}</a>{{if .Repo.Ref}} <span class="ref">@{{.Repo.Ref}}</span>{{end}}
+        {{if .Error}}<span class="count">failed</span>{{else}}<span class="count">{{.Count}} skill{{if ne .Count 1}}s{{end}}</span>{{end}}
+      </li>
+      {{end}}
+    </ul>
+    {{end}}
+
+    {{if .Clusters}}
+    <div class="summary">{{.Total}} skill{{if ne .Total 1}}s{{end}} in {{len .Clusters}} cluster{{if ne (len .Clusters) 1}}s{{end}}</div>
+    <div class="clusters">
+      {{range .Clusters}}
+      <section class="cluster">
+        <h2>{{.Name}}<span class="count">{{len .Skills}}</span></h2>
+        {{if .Description}}<p>{{.Description}}</p>{{end}}
+        <ul>
+          {{range .Skills}}
+          <li class="skill">
+            <h3>{{.Name}}</h3>
+            {{if .Description}}<p>{{.Description}}</p>{{else}}<p class="no-description">No description</p>{{end}}
+            <div class="meta">{{.Repo}} · {{.Path}}</div>
+          </li>
+          {{end}}
+        </ul>
+      </section>
+      {{end}}
+    </div>
+    {{else if and (not .Error) (eq .Total 0)}}
+    <div class="message empty">No skills found</div>
+    {{end}}
+  {{end}}
+</main>
+</body>
+</html>

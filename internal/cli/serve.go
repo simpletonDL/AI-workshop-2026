@@ -38,7 +38,9 @@ const maxSkillText = 256 << 10
 const maxHistory = 10
 
 type serveOptions struct {
-	addr string
+	addr          string
+	claudeBin     string
+	claudeTimeout time.Duration
 }
 
 func newServeCommand() *cobra.Command {
@@ -49,13 +51,16 @@ func newServeCommand() *cobra.Command {
 		Long: `Starts a local web server. Open it in a browser, enter a repository URL
 (and optionally a branch or tag) to see the skills it contains.`,
 		Example: `  atlas serve
-  atlas serve --addr 127.0.0.1:9000`,
+  atlas serve --addr 127.0.0.1:9000
+  atlas serve --claude-bin /usr/local/bin/claude`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runServe(cmd, opts)
 		},
 	}
 	cmd.Flags().StringVar(&opts.addr, "addr", "localhost:8080", "listen address (host:port)")
+	cmd.Flags().StringVar(&opts.claudeBin, "claude-bin", "claude", "Claude Code CLI used by /cluster")
+	cmd.Flags().DurationVar(&opts.claudeTimeout, "claude-timeout", defaultClaudeTimeout, "timeout of one Claude call on /cluster")
 	return cmd
 }
 
@@ -68,7 +73,7 @@ func runServe(cmd *cobra.Command, opts serveOptions) error {
 		return fmt.Errorf("listen on %s: %w", opts.addr, err)
 	}
 	srv := &http.Server{
-		Handler:           newServeHandler(checkout),
+		Handler:           newServeHandler(checkout, withClaude(claudeCLI(opts.claudeBin), opts.claudeTimeout)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Serving atlas on http://%s\n", ln.Addr())
@@ -150,9 +155,11 @@ func (h *history) list() []historyEntry {
 
 // newServeHandler returns the web UI handler. GET / shows the form; with a
 // ?repo= query it also clones the repository and shows its skills.
-func newServeHandler(checkout checkoutFunc) http.Handler {
+// GET /cluster groups skills of several repositories with Claude.
+func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 	var recent history
 	mux := http.NewServeMux()
+	mux.HandleFunc("/cluster", serveCluster(checkout, newServeConfig(opts)))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
