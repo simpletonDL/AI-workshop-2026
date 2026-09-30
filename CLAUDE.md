@@ -12,10 +12,11 @@ The orchestrator only delegates. It **does not do tasks itself**: no code or spe
    ```
    scripts/sbx-claude.sh <name> "<task description>"
    ```
-   The script creates the worktree `../<name>` on branch `<name>` from `origin/main` and runs Claude Code in a Docker sandbox on it with the given task. Run it with `run_in_background` so several agents can work in parallel.
+   The script creates the worktree `../<name>` on branch `<name>` from `origin/main` (or reuses it), creates the sandbox `<name>` (or reuses it) and runs Claude Code headless (`claude -p`) in it on the task. Run it with `run_in_background` — a task takes longer than the Bash timeout — so several agents work in parallel.
    - The task description must be self-contained: the agent does not see this conversation. Include the goal, relevant context and acceptance criteria.
-3. Wait for the agents to finish, then check each result: `gh pr list --head <name>` and the PR's CI status.
-4. Report to the user: for each task — the branch, the PR URL and the CI result. If an agent failed, say so and why; don't fix it yourself — start a follow-up task agent instead (same `<name>` reuses the existing worktree).
+3. **Getting the result.** When the agent finishes, the background command completes and its output is the agent's final report (see *Final report* below). The same report is saved to `logs/<name>.log`. Read the `STATUS` line — the script's exit code only says whether Claude ran, not whether the task succeeded.
+4. Verify the report instead of trusting it: `gh pr view <name> --json url,state,statusCheckRollup`.
+5. Report to the user: for each task — the branch, the PR URL and the CI result. If an agent failed, say so and why; don't fix it yourself — start a follow-up task agent instead (the same `<name>` reuses the worktree and sandbox; the new task must say what was already done and what went wrong).
 
 Do not remove worktrees or sandboxes unless the user asks.
 
@@ -44,6 +45,19 @@ After the local tests (`make test`, `make test-integration`) pass:
    gh pr create --base main --title "<title>" --body "<summary of changes>"
    ```
    If a PR for the branch already exists, just push — don't create a second one.
-5. Only report the task as done after CI is green and the PR is open. In the final message, mention the commit SHA, the CI result and the PR URL.
+5. Only report the task as done after CI is green and the PR is open.
 
 Do not poll CI manually with repeated `gh run list` calls — use the script.
+
+## Final report
+The agent runs headless: its **last message is the only thing the orchestrator receives**. Nobody can answer questions, so don't ask any — make a reasonable decision and mention it in the report. The last message must be exactly this format:
+```
+STATUS: DONE | FAILED
+BRANCH: <branch>
+COMMIT: <sha>
+CI: GREEN | RED | NOT RUN
+PR: <url or none>
+SUMMARY: <what was done, decisions made on your own>
+PROBLEMS: <why it failed / what is left; "none" if DONE>
+```
+`STATUS: DONE` only when CI is green and the PR is open; otherwise `FAILED`.
