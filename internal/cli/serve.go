@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -73,7 +74,9 @@ func runServe(cmd *cobra.Command, opts serveOptions) error {
 		return fmt.Errorf("listen on %s: %w", opts.addr, err)
 	}
 	srv := &http.Server{
-		Handler:           newServeHandler(checkout, withClaude(claudeCLI(opts.claudeBin), opts.claudeTimeout)),
+		Handler: newServeHandler(checkout,
+			withClaude(claudeCLI(opts.claudeBin), opts.claudeTimeout),
+			withLogger(slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil)))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Serving atlas on http://%s\n", ln.Addr())
@@ -156,10 +159,15 @@ func (h *history) list() []historyEntry {
 // newServeHandler returns the web UI handler. GET / shows the form; with a
 // ?repo= query it also clones the repository and shows its skills.
 // GET /cluster groups skills of several repositories with Claude.
+// GET /progress reports the progress of a running page request.
 func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
+	cfg := newServeConfig(opts)
 	var recent history
+	var jobs progressJobs
 	mux := http.NewServeMux()
-	mux.HandleFunc("/cluster", serveCluster(checkout, newServeConfig(opts)))
+	mux.HandleFunc("/cluster", serveCluster(checkout, cfg, &jobs))
+	mux.HandleFunc("/progress", jobs.serveProgress)
+	mux.HandleFunc("/progress.js", serveProgressJS)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -179,7 +187,9 @@ func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 		status := http.StatusOK
 		if data.Repo != "" {
 			data.Searched = true
-			status = scan(r.Context(), checkout, &data)
+			p, done := jobs.start(r.Header.Get(progressHeader))
+			status = scan(r.Context(), checkout, &data, p)
+			done()
 			if data.Error == "" {
 				data.Total = len(data.Skills)
 				recent.add(historyEntry{Repo: data.Repo, Ref: data.Ref, Count: data.Total})
@@ -193,12 +203,26 @@ func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 		// Headers are already sent, so a template error can't be reported.
 		_ = servePage.Execute(w, data)
 	})
-	return mux
+	return logRequests(cfg.log, mux)
 }
 
-// scan fills data with the skills of data.Repo and returns the HTTP status.
-func scan(ctx context.Context, checkout checkoutFunc, data *pageData) int {
+// Progress weights of the main page: cloning dominates, discovery and reading
+// the SKILL.md files are quick.
+const (
+	scanCloneSteps    = 8
+	scanDiscoverSteps = 1
+	scanReadSteps     = 1
+)
+
+// scan fills data with the skills of data.Repo, reporting its stages to p and
+// the log, and returns the HTTP status.
+func scan(ctx context.Context, checkout checkoutFunc, data *pageData, p *progress) int {
+	log := logFrom(ctx).With("repo", redactRepo(data.Repo), "ref", data.Ref)
+	p.setTotal(scanCloneSteps + scanDiscoverSteps + scanReadSteps)
+	p.setStage("Validating…")
+	log.Info("scan: validating")
 	if err := validateRemote(data.Repo); err != nil {
+		log.Info("scan: invalid repository URL")
 		data.Error = err.Error()
 		return http.StatusBadRequest
 	}
@@ -206,22 +230,34 @@ func scan(ctx context.Context, checkout checkoutFunc, data *pageData) int {
 	ctx, cancel := context.WithTimeout(ctx, scanTimeout)
 	defer cancel()
 
+	p.setStage(fmt.Sprintf("Cloning %s…", redactRepo(data.Repo)))
+	log.Info("scan: cloning")
+	start := time.Now()
 	dir, cleanup, err := checkout(ctx, data.Repo, data.Ref)
 	defer cleanup()
 	if err != nil {
+		log.Warn("scan: clone failed", "duration", time.Since(start).Round(time.Millisecond), "error", redactError(err, data.Repo))
 		data.Error = err.Error()
 		return http.StatusBadGateway
 	}
+	log.Info("scan: clone done", "duration", time.Since(start).Round(time.Millisecond))
 
+	p.advance(scanCloneSteps, "Discovering skills…")
+	log.Info("scan: discovering skills")
 	found, warnings, err := skills.Discover(dir)
 	if err != nil {
+		log.Warn("scan: discovery failed", "error", err.Error())
 		data.Error = fmt.Sprintf("scan repository: %v", err)
 		return http.StatusInternalServerError
 	}
+	log.Info("scan: skills found", "skills", len(found), "warnings", len(warnings))
+
+	p.advance(scanDiscoverSteps, fmt.Sprintf("Reading %d SKILL.md file%s…", len(found), plural(len(found))))
 	for _, s := range found {
 		view := skillView{Skill: s}
 		view.Text, view.Truncated, err = readSkillText(filepath.Join(dir, filepath.FromSlash(s.Path)))
 		if err != nil {
+			log.Warn("scan: read SKILL.md failed", "path", s.Path, "error", err.Error())
 			data.Error = fmt.Sprintf("read %s: %v", s.Path, err)
 			return http.StatusInternalServerError
 		}
@@ -230,7 +266,16 @@ func scan(ctx context.Context, checkout checkoutFunc, data *pageData) int {
 	for _, w := range warnings {
 		data.Warnings = append(data.Warnings, w.String())
 	}
+	p.advance(scanReadSteps, "")
+	log.Info("scan: done")
 	return http.StatusOK
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // filterSkills returns the skills whose name contains filter, ignoring case.
