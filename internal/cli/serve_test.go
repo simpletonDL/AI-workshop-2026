@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -141,5 +142,91 @@ func TestServeUnknownPathAndMethod(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST /: status = %d, want 405", rec.Code)
+	}
+}
+
+func TestServeShowsSkillText(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "skills/deploy", "---\nname: deploy\n---\n# Deploy\n\nRun <script>alert(1)</script> & wait.\n")
+	stub := &stubCheckout{dir: root}
+
+	_, body := get(t, newServeHandler(stub.checkout), query("https://github.com/org/repo", ""))
+	for _, want := range []string{
+		`<details class="skill">`,
+		"---\nname: deploy\n---\n# Deploy", // frontmatter included
+		"Run &lt;script&gt;alert(1)&lt;/script&gt; &amp; wait.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page has no %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "<script>") || strings.Contains(body, "text truncated") {
+		t.Error("skill text is not escaped or is marked as truncated")
+	}
+}
+
+func TestServeTruncatesLargeSkillText(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "skills/big", "---\nname: big\n---\n"+strings.Repeat("x", maxSkillText)+"TAIL")
+	stub := &stubCheckout{dir: root}
+
+	_, body := get(t, newServeHandler(stub.checkout), query("https://github.com/org/repo", ""))
+	if !strings.Contains(body, "text truncated") {
+		t.Error("large skill is not marked as truncated")
+	}
+	if strings.Contains(body, "TAIL") {
+		t.Error("text past the limit is shown")
+	}
+}
+
+func TestServeRecentSearches(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "skills/deploy", "---\nname: deploy\n---\n")
+	stub := &stubCheckout{dir: root}
+	h := newServeHandler(stub.checkout)
+
+	if _, body := get(t, h, "/"); strings.Contains(body, "Recent searches") {
+		t.Error("history is shown before any search")
+	}
+
+	get(t, h, query("https://github.com/org/a", ""))
+	get(t, h, query("https://github.com/org/b", "v1"))
+	get(t, h, query("/etc", "")) // rejected: not recorded
+	stub.err = errors.New("failed to clone")
+	get(t, h, query("https://github.com/org/broken", "")) // clone error: not recorded
+	stub.err = nil
+	_, body := get(t, h, query("https://github.com/org/a", "")) // repeat moves to top
+
+	if strings.Contains(body, "/etc") || strings.Contains(body, "org/broken") {
+		t.Error("failed searches are recorded")
+	}
+	linkA := `href="/?repo=https%3a%2f%2fgithub.com%2forg%2fa"`
+	linkB := `href="/?repo=https%3a%2f%2fgithub.com%2forg%2fb&amp;ref=v1"`
+	a, b := strings.Index(body, linkA), strings.Index(body, linkB)
+	if a < 0 || b < 0 {
+		t.Fatalf("history has no links %q and %q:\n%s", linkA, linkB, body)
+	}
+	if a > b {
+		t.Error("repeated search is not moved to the top")
+	}
+	if strings.Count(body, linkA) != 1 {
+		t.Error("repeated search is duplicated")
+	}
+	if !strings.Contains(body, "1 skill</span>") || !strings.Contains(body, `aria-current="page"`) {
+		t.Error("history has no skill count or no current entry")
+	}
+}
+
+func TestHistoryLimit(t *testing.T) {
+	var h history
+	for i := 0; i < maxHistory+5; i++ {
+		h.add(historyEntry{Repo: fmt.Sprintf("https://example.com/r%d", i)})
+	}
+	got := h.list()
+	if len(got) != maxHistory {
+		t.Fatalf("len = %d, want %d", len(got), maxHistory)
+	}
+	if want := fmt.Sprintf("https://example.com/r%d", maxHistory+4); got[0].Repo != want {
+		t.Errorf("newest = %q, want %q", got[0].Repo, want)
 	}
 }

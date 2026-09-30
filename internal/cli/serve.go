@@ -6,11 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -26,6 +30,12 @@ var servePage = template.Must(template.New("page").Parse(servePageHTML))
 
 // scanTimeout bounds how long a single request may spend cloning and scanning.
 const scanTimeout = 2 * time.Minute
+
+// maxSkillText is how much of a SKILL.md is shown in the UI.
+const maxSkillText = 256 << 10
+
+// maxHistory is how many recent searches the UI remembers.
+const maxHistory = 10
 
 type serveOptions struct {
 	addr string
@@ -89,13 +99,57 @@ type pageData struct {
 	Ref      string
 	Searched bool
 	Error    string
-	Skills   []skills.Skill
+	Skills   []skillView
 	Warnings []string
+	History  []historyEntry
+}
+
+// skillView is a skill together with the text of its SKILL.md.
+type skillView struct {
+	skills.Skill
+	Text      string
+	Truncated bool
+}
+
+// historyEntry is a search that completed without an error.
+type historyEntry struct {
+	Repo  string
+	Ref   string
+	Count int
+}
+
+// history keeps the most recent successful searches, newest first.
+type history struct {
+	mu      sync.Mutex
+	entries []historyEntry
+}
+
+// add records e, moving an earlier search for the same repo and ref to the top.
+func (h *history) add(e historyEntry) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	entries := []historyEntry{e}
+	for _, old := range h.entries {
+		if old.Repo != e.Repo || old.Ref != e.Ref {
+			entries = append(entries, old)
+		}
+	}
+	if len(entries) > maxHistory {
+		entries = entries[:maxHistory]
+	}
+	h.entries = entries
+}
+
+func (h *history) list() []historyEntry {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]historyEntry(nil), h.entries...)
 }
 
 // newServeHandler returns the web UI handler. GET / shows the form; with a
 // ?repo= query it also clones the repository and shows its skills.
 func newServeHandler(checkout checkoutFunc) http.Handler {
+	var recent history
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -116,7 +170,11 @@ func newServeHandler(checkout checkoutFunc) http.Handler {
 		if data.Repo != "" {
 			data.Searched = true
 			status = scan(r.Context(), checkout, &data)
+			if data.Error == "" {
+				recent.add(historyEntry{Repo: data.Repo, Ref: data.Ref, Count: len(data.Skills)})
+			}
 		}
+		data.History = recent.list()
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(status)
@@ -148,11 +206,38 @@ func scan(ctx context.Context, checkout checkoutFunc, data *pageData) int {
 		data.Error = fmt.Sprintf("scan repository: %v", err)
 		return http.StatusInternalServerError
 	}
-	data.Skills = found
+	for _, s := range found {
+		view := skillView{Skill: s}
+		view.Text, view.Truncated, err = readSkillText(filepath.Join(dir, filepath.FromSlash(s.Path)))
+		if err != nil {
+			data.Error = fmt.Sprintf("read %s: %v", s.Path, err)
+			return http.StatusInternalServerError
+		}
+		data.Skills = append(data.Skills, view)
+	}
 	for _, w := range warnings {
 		data.Warnings = append(data.Warnings, w.String())
 	}
 	return http.StatusOK
+}
+
+// readSkillText returns up to maxSkillText bytes of the file at p.
+func readSkillText(p string) (text string, truncated bool, err error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", false, err
+	}
+	defer f.Close()
+	buf := make([]byte, maxSkillText+1)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return "", false, err
+	}
+	if n > maxSkillText {
+		// Drop a multi-byte character cut in half by the limit.
+		return strings.ToValidUTF8(string(buf[:maxSkillText]), ""), true, nil
+	}
+	return string(buf[:n]), false, nil
 }
 
 // scpLikeRemote matches ssh remotes such as git@github.com:org/repo.git.

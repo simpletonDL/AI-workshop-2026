@@ -28,6 +28,12 @@ Clones the repository (shallow, into a temp directory), finds all skills and pri
 Starts a local web service with a simple browser UI for viewing a repository's skills.
 
 - **UI:** a page with an input for the repository URL (and an optional ref). On submit it shows the same results as `list-skills` (name, description, path), rendered as a clean, readable table or card list. The form uses `GET /?repo=<url>&ref=<ref>`, so result pages can be bookmarked and shared.
+- **Skill text:** each skill card can be expanded by clicking it to show the full raw text of its `SKILL.md` (frontmatter included) in a monospace block; cards are collapsed by default. Works without JavaScript. Files larger than 256 KiB are truncated with a visible "truncated" note. The text is HTML-escaped.
+- **Recent searches:** the page shows a list of recent successful searches (repo, ref if set, number of skills found), most recent first, each a link to its result page (`/?repo=…&ref=…`). Rules:
+  - only searches that completed without an error are recorded (including "no skills found");
+  - repeating a search moves it to the top instead of adding a duplicate (same repo + ref);
+  - at most 10 entries are kept;
+  - history lives in the server's memory: it is shared by all visitors and lost on restart.
 - **Input:** only remote repository URLs (`https://`, `http://`, `ssh://`, `git://`, `user@host:path`). Unlike the CLI, local paths, `file://` and other transports are rejected, so visitors cannot scan the server's filesystem.
 - **Errors:** clone failures and "no skills found" are shown as messages in the UI.
 - **Flags:**
@@ -45,7 +51,7 @@ Starts a local web service with a simple browser UI for viewing a repository's s
   internal/skills/         # SKILL.md discovery and parsing
   test/integration/        # integration tests
   ```
-- Unit tests for skill discovery and parsing.
+- Unit tests for skill discovery and parsing, and for the web UI handler (skill text, recent searches).
 - Integration tests (build tag `integration`, `make test-integration`) check the whole pipeline: they build the `atlas` binary and run it against small real public GitHub repositories (clone → discovery → parsing → output). Both unit and integration tests run in CI (GitHub Actions).
 
 ## Installation

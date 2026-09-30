@@ -80,9 +80,15 @@ func TestServeListsSkills(t *testing.T) {
 	if !strings.Contains(body, ".claude/skills/commit/SKILL.md") {
 		t.Error("page has no skill path")
 	}
+	if !strings.Contains(body, `<details class="skill">`) || !strings.Contains(body, "<pre>---\n") {
+		t.Error("page has no expandable SKILL.md text")
+	}
 
 	code, body = fetch(t, base, "https://github.com/simpletonDL/no-such-repo-atlas")
 	if code != http.StatusBadGateway || !strings.Contains(body, "failed to clone") {
 		t.Errorf("missing repo: status = %d, want 502 with clone error", code)
+	}
+	if !strings.Contains(body, "Recent searches") || strings.Count(body, `<span class="repo">`) != 1 {
+		t.Error("history does not show exactly the one successful search")
 	}
 }
