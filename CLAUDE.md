@@ -16,9 +16,9 @@ If a research task turns out to need a code change, say so and switch to the pip
 ## Shared memory (`memory/`)
 Decisions, gotchas, user preferences and history from past sessions; format in `memory/README.md`.
 - **Before a task:** `grep -H '^description:' memory/*.md` and read the notes relevant to it.
-- **During a code change:** if you learned something non-obvious (a trap, a decision and its reason, a user preference),
-  add or update a note in the same branch — it goes into the task's PR.
-- **Research task:** don't write notes; if something is worth remembering, suggest the note in the answer.
+- **After any task, research included:** if you learned something non-obvious (a finding, a trap, a decision and
+  its reason, a user preference), add or update a note. In a code change it goes into the task's PR; in a research
+  task writing a note does not start the pipeline — leave it uncommitted, it goes into the next PR.
 
 ## Pipeline (code changes only)
 
