@@ -8,7 +8,8 @@ GitHub has no public API to upload attachments to a PR, so the GIF is committed 
 `raw.githubusercontent.com/<repo>/<commit>/<path>` — works because the repo is public; a commit URL is immutable.
 GIF, not mp4: only images render inline from raw links. ffmpeg comes from npm `ffmpeg-static`, so nothing
 has to be installed system-wide. `progress.js` replaces the page with `document.write`, which drops injected
-elements — the fake cursor is re-added before every move.
+elements — the fake cursor is re-added before every move. CI never runs on `demo-assets`: the orphan
+branch has no `.github/workflows`, and a push only triggers workflows present in the pushed commit.
 
 **Why:** the user wants the agent to show features in PRs; text input must be typed smoothly (`demo.type`).
 **How to apply:** follow `.claude/skills/demo`; sandboxes need Chromium deps (`npx playwright install --with-deps chromium`).
