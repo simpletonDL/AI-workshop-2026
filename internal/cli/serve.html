@@ -35,6 +35,7 @@
   input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   input[name=repo] { flex: 1 1 360px; }
   input[name=ref] { flex: 0 1 180px; }
+  input[name=filter] { flex: 0 1 180px; }
   button {
     padding: 10px 20px; border: 0; border-radius: 8px; cursor: pointer;
     background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600;
@@ -45,6 +46,7 @@
   .warnings ul { margin: 4px 0 0; padding-left: 20px; }
   .empty { background: var(--surface); border: 1px solid var(--border); color: var(--muted); }
   .summary { color: var(--muted); margin-bottom: 12px; }
+  .summary a, .empty a { color: var(--accent); margin-left: 8px; }
   .skills { display: grid; gap: 12px; }
   .skill {
     background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
@@ -97,6 +99,7 @@
   <form method="get" action="/">
     <input name="repo" value="{{.Repo}}" placeholder="https://github.com/org/repo" aria-label="Repository URL" required autofocus>
     <input name="ref" value="{{.Ref}}" placeholder="branch or tag (optional)" aria-label="Branch or tag">
+    <input name="filter" value="{{.Filter}}" placeholder="filter by name (optional)" aria-label="Filter skills by name">
     <button type="submit">Show skills</button>
   </form>
 
@@ -125,7 +128,11 @@
     </div>
     {{end}}
     {{if .Skills}}
+    {{if .Filter}}
+    <div class="summary">{{len .Skills}} of {{.Total}} skill{{if ne .Total 1}}s{{end}} match{{if eq (len .Skills) 1}}es{{end}} &quot;{{.Filter}}&quot;<a href="/?repo={{.Repo}}{{if .Ref}}&amp;ref={{.Ref}}{{end}}">Clear filter</a></div>
+    {{else}}
     <div class="summary">{{len .Skills}} skill{{if ne (len .Skills) 1}}s{{end}} found</div>
+    {{end}}
     <div class="skills">
       {{range .Skills}}
       <details class="skill">
@@ -141,6 +148,8 @@
       </details>
       {{end}}
     </div>
+    {{else if and .Filter .Total}}
+    <div class="message empty">No skills match &quot;{{.Filter}}&quot; ({{.Total}} skill{{if ne .Total 1}}s{{end}} in total)<a href="/?repo={{.Repo}}{{if .Ref}}&amp;ref={{.Ref}}{{end}}">Clear filter</a></div>
     {{else}}
     <div class="message empty">No skills found</div>
     {{end}}

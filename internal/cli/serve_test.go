@@ -230,3 +230,145 @@ func TestHistoryLimit(t *testing.T) {
 		t.Errorf("newest = %q, want %q", got[0].Repo, want)
 	}
 }
+
+func filterQuery(repo, ref, filter string) string {
+	v := url.Values{"repo": {repo}, "filter": {filter}}
+	if ref != "" {
+		v.Set("ref", ref)
+	}
+	return "/?" + v.Encode()
+}
+
+// filterRepo is a repository with three skills; only the name of "code-review"
+// contains "review", while "deploy" mentions it in its description and path.
+func filterRepo(t *testing.T) *stubCheckout {
+	t.Helper()
+	root := t.TempDir()
+	writeSkill(t, root, "skills/review-tools", "---\nname: deploy\ndescription: Deploy after review\n---\n")
+	writeSkill(t, root, "skills/cr", "---\nname: Code-Review\ndescription: Review diffs\n---\n")
+	writeSkill(t, root, "skills/lint", "---\nname: lint\ndescription: Lint code\n---\n")
+	return &stubCheckout{dir: root}
+}
+
+func TestServeFilterByName(t *testing.T) {
+	for _, filter := range []string{"review", "REVIEW", "  ReV  ", "de-re"} {
+		stub := filterRepo(t)
+		code, body := get(t, newServeHandler(stub.checkout), filterQuery("https://github.com/org/repo", "v1", filter))
+		if code != http.StatusOK {
+			t.Fatalf("%q: status = %d", filter, code)
+		}
+		trimmed := strings.TrimSpace(filter)
+		for _, want := range []string{
+			"<h2>Code-Review</h2>",
+			"1 of 3 skills matches &quot;" + trimmed + "&quot;",
+			`value="` + trimmed + `"`, // form keeps the filter
+			`href="/?repo=https%3a%2f%2fgithub.com%2forg%2frepo&amp;ref=v1">Clear filter`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%q: page has no %q:\n%s", filter, want, body)
+			}
+		}
+		for _, unwanted := range []string{"<h2>deploy</h2>", "<h2>lint</h2>"} {
+			if strings.Contains(body, unwanted) {
+				t.Errorf("%q: page shows filtered-out skill %q", filter, unwanted)
+			}
+		}
+	}
+}
+
+func TestServeFilterSubstringCount(t *testing.T) {
+	stub := filterRepo(t)
+	_, body := get(t, newServeHandler(stub.checkout), filterQuery("https://github.com/org/repo", "", "e"))
+	for _, want := range []string{"<h2>Code-Review</h2>", "<h2>deploy</h2>", "2 of 3 skills match &quot;e&quot;"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page has no %q", want)
+		}
+	}
+	if strings.Contains(body, "<h2>lint</h2>") {
+		t.Error("lint does not match \"e\" but is shown")
+	}
+}
+
+func TestServeFilterNoMatches(t *testing.T) {
+	stub := filterRepo(t)
+	code, body := get(t, newServeHandler(stub.checkout), filterQuery("https://github.com/org/repo", "", "xyz"))
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	if !strings.Contains(body, "No skills match &quot;xyz&quot;") || !strings.Contains(body, "Clear filter") {
+		t.Errorf("page has no \"no matches\" message with a clear link:\n%s", body)
+	}
+	if strings.Contains(body, "No skills found") || strings.Contains(body, `<details class="skill">`) {
+		t.Error("page shows \"No skills found\" or skills when nothing matches")
+	}
+}
+
+func TestServeFilterEmptyRepo(t *testing.T) {
+	stub := &stubCheckout{dir: t.TempDir()}
+	_, body := get(t, newServeHandler(stub.checkout), filterQuery("https://github.com/org/empty", "", "xyz"))
+	if !strings.Contains(body, "No skills found") || strings.Contains(body, "No skills match") {
+		t.Errorf("repo without skills: want \"No skills found\":\n%s", body)
+	}
+}
+
+func TestServeEmptyFilter(t *testing.T) {
+	for _, filter := range []string{"", "   "} {
+		stub := filterRepo(t)
+		_, body := get(t, newServeHandler(stub.checkout), filterQuery("https://github.com/org/repo", "", filter))
+		if !strings.Contains(body, "3 skills found") || strings.Contains(body, "Clear filter") {
+			t.Errorf("%q: filter is applied:\n%s", filter, body)
+		}
+		for _, name := range []string{"Code-Review", "deploy", "lint"} {
+			if !strings.Contains(body, "<h2>"+name+"</h2>") {
+				t.Errorf("%q: page has no skill %q", filter, name)
+			}
+		}
+	}
+}
+
+func TestServeFilterDoesNotAffectHistory(t *testing.T) {
+	stub := filterRepo(t)
+	h := newServeHandler(stub.checkout)
+	get(t, h, filterQuery("https://github.com/org/repo", "", "lint"))
+	_, body := get(t, h, filterQuery("https://github.com/org/repo", "", "xyz"))
+
+	link := `href="/?repo=https%3a%2f%2fgithub.com%2forg%2frepo"`
+	if strings.Count(body, link) != 2 { // history entry + clear filter link
+		t.Errorf("want one history entry and a clear link %q:\n%s", link, body)
+	}
+	if strings.Contains(body, "filter=") {
+		t.Error("history links contain the filter")
+	}
+	if !strings.Contains(body, "3 skills</span>") {
+		t.Error("history does not record the unfiltered skill count")
+	}
+	if !strings.Contains(body, `aria-current="page"`) {
+		t.Error("filtered search is not marked as current in history")
+	}
+}
+
+func TestServeFilterEscaped(t *testing.T) {
+	stub := filterRepo(t)
+	filter := `"><script>alert(1)</script>`
+	_, body := get(t, newServeHandler(stub.checkout), filterQuery("https://github.com/org/repo", "", filter))
+	if strings.Contains(body, "<script>") {
+		t.Errorf("filter is not escaped:\n%s", body)
+	}
+	if !strings.Contains(body, "No skills match &quot;&#34;&gt;&lt;script&gt;alert(1)&lt;/script&gt;&quot;") {
+		t.Errorf("page has no escaped filter:\n%s", body)
+	}
+}
+
+func TestFilterSkills(t *testing.T) {
+	all := []skillView{{}, {}, {}}
+	all[0].Name, all[1].Name, all[2].Name = "Deploy", "code-review", "lint"
+	if got := filterSkills(all, ""); len(got) != 3 {
+		t.Errorf("empty filter: len = %d, want 3", len(got))
+	}
+	if got := filterSkills(all, "DEP"); len(got) != 1 || got[0].Name != "Deploy" {
+		t.Errorf("DEP: got %v", got)
+	}
+	if got := filterSkills(all, "nope"); len(got) != 0 {
+		t.Errorf("nope: got %v", got)
+	}
+}
