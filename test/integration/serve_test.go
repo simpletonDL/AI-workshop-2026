@@ -14,11 +14,12 @@ import (
 	"time"
 )
 
-// startServe runs `atlas serve` on a free port and returns its base URL.
-func startServe(t *testing.T) string {
+// startServe runs `atlas serve` on a free port with extra flags and returns
+// its base URL.
+func startServe(t *testing.T, flags ...string) string {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, atlasBin, "serve", "--addr", "127.0.0.1:0")
+	cmd := exec.CommandContext(ctx, atlasBin, append([]string{"serve", "--addr", "127.0.0.1:0"}, flags...)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
