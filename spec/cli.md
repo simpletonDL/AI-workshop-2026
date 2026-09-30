@@ -27,7 +27,8 @@ Clones the repository (shallow, into a temp directory), finds all skills and pri
 ### `atlas serve`
 Starts a local web service with a simple browser UI for viewing a repository's skills.
 
-- **UI:** a page with an input for the repository URL (and an optional ref). On submit it shows the same results as `list-skills` (name, description, path), rendered as a clean, readable table or card list.
+- **UI:** a page with an input for the repository URL (and an optional ref). On submit it shows the same results as `list-skills` (name, description, path), rendered as a clean, readable table or card list. The form uses `GET /?repo=<url>&ref=<ref>`, so result pages can be bookmarked and shared.
+- **Input:** only remote repository URLs (`https://`, `http://`, `ssh://`, `git://`, `user@host:path`). Unlike the CLI, local paths, `file://` and other transports are rejected, so visitors cannot scan the server's filesystem.
 - **Errors:** clone failures and "no skills found" are shown as messages in the UI.
 - **Flags:**
   - `--addr <host:port>` — listen address (defaults to `localhost:8080`).
@@ -40,7 +41,7 @@ Starts a local web service with a simple browser UI for viewing a repository's s
 - Layout:
   ```
   cmd/atlas/main.go        # entry point
-  internal/cli/            # cobra commands (root, list-skills)
+  internal/cli/            # cobra commands (root, list-skills, serve + embedded HTML page)
   internal/skills/         # SKILL.md discovery and parsing
   test/integration/        # integration tests
   ```

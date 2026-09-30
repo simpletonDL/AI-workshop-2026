@@ -18,7 +18,7 @@ func NewRootCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(newListSkillsCommand())
+	root.AddCommand(newListSkillsCommand(), newServeCommand())
 	return root
 }
 
