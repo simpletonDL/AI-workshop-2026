@@ -34,10 +34,12 @@ Clones the repository (shallow, into a temp directory), finds all skills and pri
   cmd/atlas/main.go        # entry point
   internal/cli/            # cobra commands (root, list-skills)
   internal/skills/         # SKILL.md discovery and parsing
+  test/integration/        # integration tests
   ```
 - Unit tests for skill discovery and parsing.
+- Integration tests (build tag `integration`, `make test-integration`) check the whole pipeline: they build the `atlas` binary and run it against small real public GitHub repositories (clone → discovery → parsing → output). Both unit and integration tests run in CI (GitHub Actions).
 
 ## Installation
 - `go install github.com/<org>/atlas/cmd/atlas@latest`
 - `scripts/install.sh` — installs from a local clone (`go install ./cmd/atlas`), checks that Go is installed and that `$(go env GOPATH)/bin` is in `PATH`.
-- `Makefile`: `build`, `install`, `test`.
+- `Makefile`: `build`, `install`, `test`, `test-integration`.

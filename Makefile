@@ -1,7 +1,7 @@
 BINARY := atlas
 BIN_DIR := bin
 
-.PHONY: build install test
+.PHONY: build install test test-integration
 
 build:
 	go build -o $(BIN_DIR)/$(BINARY) ./cmd/atlas
@@ -11,3 +11,6 @@ install:
 
 test:
 	go test ./...
+
+test-integration:
+	go test -tags integration -count=1 ./test/integration/
