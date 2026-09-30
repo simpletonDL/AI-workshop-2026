@@ -50,6 +50,55 @@ func TestProgressPercent(t *testing.T) {
 	}
 }
 
+func TestProgressPart(t *testing.T) {
+	var p progress
+	p.setTotal(200)
+	a, b := p.part(100), p.part(100)
+	for _, step := range []struct {
+		part    *part
+		percent int
+		want    int
+	}{
+		{a, 50, 25},
+		{b, 20, 35},
+		// A part never goes back or beyond its steps.
+		{a, 10, 35},
+		{a, 150, 60},
+		{b, -5, 60},
+	} {
+		step.part.set(step.percent)
+		if s := p.snapshot(); s.Percent != step.want {
+			t.Errorf("after set(%d): percent = %d, want %d", step.percent, s.Percent, step.want)
+		}
+	}
+	b.finish("Next…")
+	if s := p.snapshot(); s.Percent != 99 || s.Stage != "Next…" {
+		t.Errorf("after finish: %+v", s)
+	}
+}
+
+func TestServeReportsCloneProgress(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h := newServeHandler(func(ctx context.Context, _, _ string) (string, func(), error) {
+		cloneProgressFrom(ctx)(50)
+		started <- struct{}{}
+		<-release
+		return t.TempDir(), func() {}, nil
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		getWithProgress(h, query("https://github.com/org/repo", ""), testProgressID)
+	}()
+	<-started
+	// Half of the clone's 80%.
+	if _, s := getProgress(t, h, testProgressID); s.Percent != 40 || !strings.HasPrefix(s.Stage, "Cloning ") {
+		t.Errorf("progress while cloning = %+v", s)
+	}
+	close(release)
+	<-done
+}
+
 func TestProgressFinishWithoutSteps(t *testing.T) {
 	var p progress
 	p.finish()

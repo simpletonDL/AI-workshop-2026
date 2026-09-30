@@ -230,12 +230,12 @@ func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 	return logRequests(cfg.log, mux)
 }
 
-// Progress weights of the main page: cloning dominates, discovery and reading
-// the SKILL.md files are quick.
+// Progress weights of the main page: cloning dominates and advances with git's
+// progress, discovery and reading the SKILL.md files are quick.
 const (
-	scanCloneSteps    = 8
-	scanDiscoverSteps = 1
-	scanReadSteps     = 1
+	scanCloneSteps    = 80
+	scanDiscoverSteps = 10
+	scanReadSteps     = 10
 )
 
 // scan fills data with the skills of data.Repo, reporting its stages to p and
@@ -257,7 +257,8 @@ func scan(ctx context.Context, checkout checkoutFunc, data *pageData, p *progres
 	p.setStage(fmt.Sprintf("Cloning %s…", redactRepo(data.Repo)))
 	log.Info("scan: cloning")
 	start := time.Now()
-	dir, cleanup, err := checkout(ctx, data.Repo, data.Ref)
+	clone := p.part(scanCloneSteps)
+	dir, cleanup, err := checkout(withCloneProgress(ctx, clone.set), data.Repo, data.Ref)
 	defer cleanup()
 	if err != nil {
 		log.Warn("scan: clone failed", "duration", time.Since(start).Round(time.Millisecond), "error", redactError(err, data.Repo))
@@ -266,7 +267,7 @@ func scan(ctx context.Context, checkout checkoutFunc, data *pageData, p *progres
 	}
 	log.Info("scan: clone done", "duration", time.Since(start).Round(time.Millisecond))
 
-	p.advance(scanCloneSteps, "Discovering skills…")
+	clone.finish("Discovering skills…")
 	log.Info("scan: discovering skills")
 	found, warnings, err := skills.Discover(dir)
 	if err != nil {
