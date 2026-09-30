@@ -2,3 +2,5 @@
 
 .idea
 logs
+demo/node_modules/
+demo/out/

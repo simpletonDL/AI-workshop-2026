@@ -89,6 +89,7 @@ Starts a local web service with a simple browser UI for viewing a repository's s
   internal/cli/            # cobra commands (root, list-skills, serve + embedded HTML pages and progress script)
   internal/skills/         # SKILL.md discovery and parsing
   test/integration/        # integration tests
+  demo/                    # web UI demo recorder (Node, Playwright) and scenarios; not part of the build
   ```
 - Unit tests for skill discovery and parsing, for the web UI handler (skill text, recent searches, name filter, clustering with a fake Claude runner — unit tests never call the real Claude, progress tracking and the `/progress` endpoint, logging), and for the repository cache (hit/miss, TTL, eviction, concurrent requests cloning once, cache hits through the progress stages — with a fake clone function and a local git repository).
 - Integration tests (build tag `integration`, `make test-integration`) check the whole pipeline: they build the `atlas` binary and run it against small real public GitHub repositories (clone → discovery → parsing → output). The `/cluster` integration tests pass a fake `claude` script via `--claude-bin` that prints a canned JSON envelope, so CI needs neither Claude nor an API key. Both unit and integration tests run in CI (GitHub Actions).
@@ -97,3 +98,4 @@ Starts a local web service with a simple browser UI for viewing a repository's s
 - `go install github.com/<org>/atlas/cmd/atlas@latest`
 - `scripts/install.sh` — installs from a local clone (`go install ./cmd/atlas`), checks that Go is installed and that `$(go env GOPATH)/bin` is in `PATH`.
 - `Makefile`: `build`, `install`, `test`, `test-integration`.
+- `scripts/demo-record.sh <scenario>` — records a web UI demo GIF (Node + Playwright, see `.claude/skills/demo`).
