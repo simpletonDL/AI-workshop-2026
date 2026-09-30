@@ -80,7 +80,7 @@
       // The rally dance: elbows bent, fists pumping in turn, hips swaying.
       var f = t * 2 * Math.PI * 1.7;
       g = {
-        hl: 6 * sin(f / 2), hr: 6 * sin(f / 2), kl: 8 + 8 * sin(f), kr: 8 - 8 * sin(f),
+        hl: 12 * sin(f / 2), hr: 12 * sin(f / 2), kl: 8 + 8 * sin(f), kr: 8 - 8 * sin(f),
         sl: 28 + 14 * sin(f), sr: -28 + 14 * sin(f), el: -165 + 25 * sin(f), er: 165 + 25 * sin(f),
         bob: 4 * Math.abs(sin(f)), lean: 6 * sin(f / 2), nod: -7 * sin(f / 2), hair: 14 * sin(f)
       };
