@@ -243,9 +243,14 @@ func serveCluster(checkout checkoutFunc, cfg serveConfig, jobs *progressJobs) ht
 	}
 }
 
-// Progress weights of /cluster: cloning and discovery are one step each per
-// repository; the Claude call weighs as much as all of them together.
-const clusterStepsPerRepo = 2
+// Progress weights of /cluster per repository: cloning (advancing with git's
+// progress) and discovery weigh the same; the Claude call weighs as much as all
+// repositories together.
+const (
+	clusterCloneSteps    = 100
+	clusterDiscoverSteps = 100
+	clusterStepsPerRepo  = clusterCloneSteps + clusterDiscoverSteps
+)
 
 // clusterRepos scans the repositories in data.Repos, clusters their skills
 // with Claude, reporting its stages to p and the log, and returns the HTTP
@@ -316,17 +321,19 @@ func scanRepos(ctx context.Context, checkout checkoutFunc, specs []repoSpec, p *
 	}
 	var mu sync.Mutex
 	cloned, scanned := 0, 0
-	// step records a finished clone or discovery of repo and moves the stage on.
-	step := func(repo string, clone bool) {
+	// cloneDone and scanDone record a finished clone or discovery of repo and
+	// move the stage on.
+	cloneDone := func(repo string, clone *part) {
 		mu.Lock()
 		defer mu.Unlock()
-		if clone {
-			cloned++
-			p.advance(1, fmt.Sprintf("Cloned %s (%d/%d), discovering skills…", repo, cloned, n))
-		} else {
-			scanned++
-			p.advance(1, fmt.Sprintf("Scanned %s (%d/%d)…", repo, scanned, n))
-		}
+		cloned++
+		clone.finish(fmt.Sprintf("Cloned %s (%d/%d), discovering skills…", repo, cloned, n))
+	}
+	scanDone := func(repo string) {
+		mu.Lock()
+		defer mu.Unlock()
+		scanned++
+		p.advance(clusterDiscoverSteps, fmt.Sprintf("Scanned %s (%d/%d)…", repo, scanned, n))
 	}
 
 	results := make([]repoResult, len(specs))
@@ -340,18 +347,19 @@ func scanRepos(ctx context.Context, checkout checkoutFunc, specs []repoSpec, p *
 			res := repoResult{Repo: spec}
 			log.Info("cluster: cloning")
 			start := time.Now()
-			dir, cleanup, err := checkout(ctx, spec.URL, spec.Ref)
+			clone := p.part(clusterCloneSteps)
+			dir, cleanup, err := checkout(withCloneProgress(ctx, clone.set), spec.URL, spec.Ref)
 			defer cleanup()
 			if err != nil {
 				log.Warn("cluster: clone failed", "duration", time.Since(start).Round(time.Millisecond), "error", redactError(err, spec.URL))
 				res.Error = err.Error()
-				step(repo, true)
-				step(repo, false)
+				cloneDone(repo, clone)
+				scanDone(repo)
 				results[i] = res
 				return
 			}
 			log.Info("cluster: clone done", "duration", time.Since(start).Round(time.Millisecond))
-			step(repo, true)
+			cloneDone(repo, clone)
 			log.Info("cluster: discovering skills")
 			if found, _, err := skills.Discover(dir); err != nil {
 				log.Warn("cluster: discovery failed", "error", err.Error())
@@ -360,7 +368,7 @@ func scanRepos(ctx context.Context, checkout checkoutFunc, specs []repoSpec, p *
 				log.Info("cluster: skills found", "skills", len(found))
 				res.skills, res.Count = found, len(found)
 			}
-			step(repo, false)
+			scanDone(repo)
 			results[i] = res
 		}(i, spec)
 	}

@@ -77,6 +77,42 @@ func (p *progress) advance(n int, stage string) {
 	}
 }
 
+// part is a piece of a job worth steps that completes gradually, e.g. a clone.
+type part struct {
+	p     *progress
+	steps int
+	done  int // guarded by p.mu
+}
+
+// part starts a piece of work worth steps (not yet counted as done).
+func (p *progress) part(steps int) *part {
+	return &part{p: p, steps: steps}
+}
+
+// set moves the part to percent (0–100) of its steps; it never goes back.
+func (pt *part) set(percent int) {
+	pt.p.mu.Lock()
+	defer pt.p.mu.Unlock()
+	pt.moveTo(pt.steps * min(max(percent, 0), 100) / 100)
+}
+
+// finish marks the whole part as done and, if stage is not empty, moves to it.
+func (pt *part) finish(stage string) {
+	pt.p.mu.Lock()
+	defer pt.p.mu.Unlock()
+	pt.moveTo(pt.steps)
+	if stage != "" {
+		pt.p.stage = stage
+	}
+}
+
+func (pt *part) moveTo(n int) {
+	if n > pt.done {
+		pt.p.done = min(pt.p.done+n-pt.done, pt.p.total)
+		pt.done = n
+	}
+}
+
 // finish marks the job as complete: percent becomes 100.
 func (p *progress) finish() {
 	p.mu.Lock()
