@@ -57,11 +57,11 @@ for attempt in 1 2 3; do
   tree=$(git write-tree)
   unset GIT_INDEX_FILE
   commit=$(git commit-tree "$tree" ${parent:+-p "$parent"} -m "demo: $path")
-  if git push -q origin "$commit:refs/heads/demo-assets"; then
+  if git push -q origin "$commit:refs/heads/demo-assets" 2>"$tmp/push.log"; then
     # A commit URL never changes, so the PR shows exactly this recording.
     echo "![$scenario demo](https://raw.githubusercontent.com/$repo/$commit/$path)"
     exit 0
   fi
-  echo "push to demo-assets failed (attempt $attempt), retrying" >&2
+  cat "$tmp/push.log" >&2; echo "push to demo-assets failed (attempt $attempt), retrying" >&2
 done
 exit 1
