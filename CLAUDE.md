@@ -13,6 +13,13 @@ First decide what kind of task it is:
 
 If a research task turns out to need a code change, say so and switch to the pipeline only then.
 
+## Shared memory (`memory/`)
+Decisions, gotchas, user preferences and history from past sessions; format in `memory/README.md`.
+- **Before a task:** `grep -H '^description:' memory/*.md` and read the notes relevant to it.
+- **During a code change:** if you learned something non-obvious (a trap, a decision and its reason, a user preference),
+  add or update a note in the same branch — it goes into the task's PR.
+- **Research task:** don't write notes; if something is worth remembering, suggest the note in the answer.
+
 ## Pipeline (code changes only)
 
 ### Core rule
