@@ -13,7 +13,7 @@ Never record by hand: the scenario is reviewable, re-runnable and doubles as an 
    export default async (demo) => {
      await demo.goto('/');
      await demo.type('input[name=repo]', 'https://github.com/anthropics/skills');
-     await demo.click('button[type=submit]');
+     await demo.click('button.primary');
      await demo.page.waitForSelector('.summary', { timeout: 60_000 });
      await demo.screenshot('results');
    };

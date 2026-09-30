@@ -41,7 +41,7 @@ func jsonString(s string) string {
 func fetchCluster(t *testing.T, base string, repos ...string) (int, string) {
 	t.Helper()
 	client := &http.Client{Timeout: 3 * time.Minute}
-	resp, err := client.Get(base + "/cluster?" + url.Values{"repos": {strings.Join(repos, "\n")}}.Encode())
+	resp, err := client.Get(base + "/cluster?" + url.Values{"repo": repos}.Encode())
 	if err != nil {
 		t.Fatal(err)
 	}

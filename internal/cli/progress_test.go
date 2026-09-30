@@ -282,7 +282,7 @@ func TestScanReposProgressStages(t *testing.T) {
 	co.errs = map[string]error{"https://github.com/org/b": errors.New("failed to clone: nope")}
 	var p progress
 	p.setTotal(2 * clusterStepsPerRepo * 2)
-	scanRepos(context.Background(), co.checkout, []repoSpec{{URL: "https://github.com/org/a"}, {URL: "https://github.com/org/b"}}, &p)
+	scanRepos(context.Background(), co.checkout, []repoSpec{{URL: "https://github.com/org/a"}, {URL: "https://github.com/org/b"}}, clusterScan, &p)
 	// A failed clone still counts its steps, so the scan half is complete.
 	s := p.snapshot()
 	if s.Percent != 50 || !strings.HasPrefix(s.Stage, "Scanned ") || !strings.Contains(s.Stage, "(2/2)") {

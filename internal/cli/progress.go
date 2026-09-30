@@ -235,7 +235,7 @@ func logRequests(log *slog.Logger, next http.Handler) http.Handler {
 	var seq atomic.Int64
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		level := slog.LevelInfo
-		if r.URL.Path == "/progress" || r.URL.Path == "/progress.js" {
+		if r.URL.Path == "/progress" || r.URL.Path == "/progress.js" || r.URL.Path == "/repos.js" {
 			level = slog.LevelDebug
 		}
 		reqLog := log.With("req", seq.Add(1))
