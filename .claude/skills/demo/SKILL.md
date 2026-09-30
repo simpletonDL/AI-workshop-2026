@@ -33,5 +33,5 @@ Never record by hand: the scenario is reviewable, re-runnable and doubles as an 
    wrong state — fix the code or the scenario and record again. Never attach a demo you haven't looked at.
 4. Publish: `scripts/demo-record.sh --publish <name>`. It pushes the GIF to the orphan branch `demo-assets`
    (`<branch>/<name>.gif`, the working tree and current branch are untouched) and prints a markdown image.
-   Put that line into the PR body (`gh pr create --body` or, if the PR exists, `gh pr edit --body`).
+   Put that line into the **Demo** section of the PR body (`.github/pull_request_template.md`).
 5. Commit the scenario with the change. Update an existing scenario when the UI it shows changes.

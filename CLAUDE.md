@@ -43,9 +43,12 @@ After the local tests (`make test`, `make test-integration`) pass:
 3. If CI is red: read the logs, fix, commit, push, and run `scripts/ci-wait.sh` again.
 4. Once `scripts/ci-wait.sh` prints `CI GREEN`, open a PR into `main` (you are allowed to do this without asking):
    ```
-   gh pr create --base main --title "<title>" --body "<summary of changes>"
+   gh pr create --base main --title "<title>" --body-file <file>
    ```
-   If a PR for the branch already exists, just push — don't create a second one.
+   The body follows `.github/pull_request_template.md`: keep every section and its order, fill each one
+   (write "none" / "—" instead of dropping it), remove the `<!-- -->` hints.
+   If a PR for the branch already exists, just push — don't create a second one; update its body
+   (`gh pr edit --body-file`) if the change makes it outdated.
 5. Only report the task as done after CI is green and the PR is open.
 
 If the change is visible in the web UI (`atlas serve`), record a demo and put it into the PR body —
