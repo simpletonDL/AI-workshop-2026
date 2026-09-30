@@ -12,5 +12,10 @@ description: UI tests = Playwright screenshots in the Playwright Docker image; l
 - rendering: the host (macOS) renders fonts differently, so tests only run in Docker; arm64 and amd64
   images gave pixel-identical screenshots, so the script uses the native architecture.
 
+- failures: `failures-reporter.mjs` → `out/failures.json` → `scripts/ui-report.sh` (CI only) pushes the PNGs
+  to `demo-assets` (`scripts/publish-assets.sh`, the ui job has `contents: write`) and links them in the log,
+  annotations and job summary. The `<name>-expected.png` attachment points at the baseline in `__screenshots__`,
+  so match attachments by name, not by file name. The dancer loop uses `expect.soft` to report every changed frame.
+
 **How to apply:** an intended UI change → `scripts/ui-test.sh --update`, look at the PNGs, commit them.
 Keep `@playwright/test` in `test/ui/package.json` and the image tag in `scripts/ui-test.sh` on the same version.

@@ -42,26 +42,7 @@ node "$demo/record.mjs" "$scenario" "$url" "$out"
 
 $publish || exit 0
 
-# Commit the GIF to demo-assets without touching the working tree or the current branch.
+# The GIF goes to the orphan branch demo-assets; a commit URL never changes, so the PR shows exactly this recording.
 branch=$(git rev-parse --abbrev-ref HEAD)
-path="$branch/$scenario.gif"
-repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-blob=$(git hash-object -w "$out/$scenario.gif")
-for attempt in 1 2 3; do
-  git fetch -q origin demo-assets 2>/dev/null || true
-  parent=$(git rev-parse -q --verify refs/remotes/origin/demo-assets || true)
-  export GIT_INDEX_FILE="$tmp/index"
-  rm -f "$GIT_INDEX_FILE"
-  if [ -n "$parent" ]; then git read-tree "$parent"; else git read-tree --empty; fi
-  git update-index --add --cacheinfo "100644,$blob,$path"
-  tree=$(git write-tree)
-  unset GIT_INDEX_FILE
-  commit=$(git commit-tree "$tree" ${parent:+-p "$parent"} -m "demo: $path")
-  if git push -q origin "$commit:refs/heads/demo-assets" 2>"$tmp/push.log"; then
-    # A commit URL never changes, so the PR shows exactly this recording.
-    echo "![$scenario demo](https://raw.githubusercontent.com/$repo/$commit/$path)"
-    exit 0
-  fi
-  cat "$tmp/push.log" >&2; echo "push to demo-assets failed (attempt $attempt), retrying" >&2
-done
-exit 1
+url=$(cd "$out" && "$root/scripts/publish-assets.sh" "$branch" "$scenario.gif")
+echo "![$scenario demo]($url)"

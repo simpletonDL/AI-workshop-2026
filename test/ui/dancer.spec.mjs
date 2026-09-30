@@ -25,7 +25,8 @@ test('dancer timeline', async ({ page }) => {
   for (const at of moments) {
     await page.clock.runFor(at - now);
     now = at;
-    await expect(page).toHaveScreenshot(`t${String(at).padStart(5, '0')}.png`);
+    // Soft: a changed dance shows every frame that differs, not only the first one.
+    await expect.soft(page).toHaveScreenshot(`t${String(at).padStart(5, '0')}.png`);
   }
 });
 

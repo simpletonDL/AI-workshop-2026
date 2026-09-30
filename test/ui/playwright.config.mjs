@@ -12,7 +12,7 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   timeout: 60_000,
-  reporter: [['list'], ['html', { open: 'never', outputFolder: 'out/report' }]],
+  reporter: [['list'], ['html', { open: 'never', outputFolder: 'out/report' }], ['./failures-reporter.mjs']],
   outputDir: 'out/results',
   snapshotPathTemplate: '{testDir}/__screenshots__/{testFileName}/{arg}{ext}',
   expect: {

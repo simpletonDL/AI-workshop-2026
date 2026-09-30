@@ -36,6 +36,8 @@ jobs:
 
   ui:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # scripts/ui-report.sh pushes failure screenshots to demo-assets
     steps:
       - uses: actions/checkout@v4
 
@@ -46,6 +48,10 @@ jobs:
 
       - name: UI tests
         run: scripts/ui-test.sh
+
+      - name: Explain failures
+        if: failure()
+        run: scripts/ui-report.sh
 
       - name: Upload report
         if: failure()
