@@ -43,12 +43,13 @@
 
   form.addEventListener("submit", function (event) {
     if (!window.crypto || !window.crypto.getRandomValues) return;
+    // Named buttons (add/remove a repository) only edit the form.
+    if (event.submitter && event.submitter.name) return;
     event.preventDefault();
 
     var url = form.getAttribute("action") + "?" + new URLSearchParams(new FormData(form)).toString();
     var id = newID();
-    var button = form.querySelector("button");
-    if (button) button.disabled = true;
+    Array.prototype.forEach.call(form.querySelectorAll("button"), function (b) { b.disabled = true; });
     var old = document.querySelector(".progress");
     if (old) old.parentNode.removeChild(old);
     var render = progressBox();

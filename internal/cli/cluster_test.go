@@ -50,7 +50,14 @@ func (f *fakeClaude) run(_ context.Context, prompt string) (string, error) {
 	return f.answer, f.err
 }
 
+// clusterQuery builds the form query of /cluster from "<url>" or
+// "<url> <ref>" lines: one repo/ref pair per line.
 func clusterQuery(lines ...string) string {
+	return "/cluster?" + rowsQuery(lines...)
+}
+
+// legacyClusterQuery is the query of the former textarea: ?repos=<lines>.
+func legacyClusterQuery(lines ...string) string {
 	return "/cluster?" + url.Values{"repos": {strings.Join(lines, "\n")}}.Encode()
 }
 
@@ -78,7 +85,7 @@ func TestClusterForm(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("status = %d", code)
 	}
-	if !strings.Contains(body, `<form method="get" action="/cluster">`) || !strings.Contains(body, `<textarea name="repos"`) {
+	if !strings.Contains(body, `<form method="get" action="/cluster">`) || !strings.Contains(body, `name="repo"`) || !strings.Contains(body, `name="add"`) {
 		t.Errorf("page has no repos form:\n%s", body)
 	}
 	if !strings.Contains(body, `href="/"`) {
@@ -113,7 +120,7 @@ func TestClusterHappyPath(t *testing.T) {
 		"<h3>deploy</h3>", "Deploy the service", "https://github.com/org/a · skills/deploy/SKILL.md",
 		"https://github.com/org/b v1 · .claude/skills/release/SKILL.md",
 		"Review &lt;b&gt;diffs&lt;/b&gt;", // escaped
-		"https://github.com/org/b v1</textarea>",
+		`value="https://github.com/org/b"`, `value="v1"`, // form keeps input
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page has no %q", want)
@@ -216,7 +223,7 @@ func TestClusterPerRepoErrors(t *testing.T) {
 	co.errs = map[string]error{"https://github.com/org/b": errors.New("failed to clone https://github.com/org/b: boom")}
 	fc := &fakeClaude{answer: `[{"name": "All", "skills": ["s1", "s2"]}]`}
 
-	code, body := get(t, clusterHandler(co, fc), clusterQuery(
+	code, body := get(t, clusterHandler(co, fc), legacyClusterQuery(
 		"https://github.com/org/a", "https://github.com/org/b", "/etc", "https://github.com/org/c main extra"))
 	if code != http.StatusOK {
 		t.Fatalf("status = %d, body:\n%s", code, body)
@@ -256,7 +263,7 @@ func TestClusterValidation(t *testing.T) {
 func TestClusterRepoLimitAndDedupe(t *testing.T) {
 	co, fc := &repoCheckout{dirs: map[string]string{}}, &fakeClaude{}
 	var lines []string
-	for i := 0; i <= maxClusterRepos; i++ {
+	for i := 0; i <= maxRepos; i++ {
 		lines = append(lines, fmt.Sprintf("https://github.com/org/r%d", i))
 	}
 	code, body := get(t, clusterHandler(co, fc), clusterQuery(lines...))
@@ -269,15 +276,15 @@ func TestClusterRepoLimitAndDedupe(t *testing.T) {
 
 	// Duplicates don't count against the limit and are cloned once.
 	dir := t.TempDir()
-	for i := 0; i < maxClusterRepos; i++ {
+	for i := 0; i < maxRepos; i++ {
 		co.dirs[lines[i]] = dir
 	}
-	dup := append(append([]string{}, lines[:maxClusterRepos]...), lines[0], lines[1])
+	dup := append(append([]string{}, lines[:maxRepos]...), lines[0], lines[1])
 	if code, body := get(t, clusterHandler(co, fc), clusterQuery(dup...)); code != http.StatusOK || !strings.Contains(body, "No skills found") {
 		t.Errorf("status = %d, want 200 with no skills:\n%s", code, body)
 	}
-	if len(co.calls) != maxClusterRepos {
-		t.Errorf("checkout called %d times, want %d", len(co.calls), maxClusterRepos)
+	if len(co.calls) != maxRepos {
+		t.Errorf("checkout called %d times, want %d", len(co.calls), maxRepos)
 	}
 	if len(fc.prompts) != 0 {
 		t.Error("claude called without skills")

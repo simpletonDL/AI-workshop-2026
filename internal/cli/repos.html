@@ -1,0 +1,43 @@
+{{/* Repository list shared by the main page and /cluster. */}}
+{{define "repo-css"}}
+  form { display: grid; gap: 8px; margin-bottom: 24px; }
+  input {
+    padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface); color: var(--text); font: inherit; min-width: 0;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    padding: 10px 20px; border: 0; border-radius: 8px; cursor: pointer;
+    background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600;
+  }
+  .form-foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  .repo-rows { display: grid; gap: 8px; }
+  .repo-row { display: flex; gap: 8px; }
+  .repo-row input[name=repo] { flex: 1 1 360px; }
+  .repo-row input[name=ref] { flex: 0 1 200px; }
+  .remove-repo {
+    flex: none; padding: 0 14px; border: 1px solid var(--border); background: var(--surface);
+    color: var(--muted); font-size: 18px; font-weight: 400; line-height: 1;
+  }
+  .remove-repo:hover { border-color: var(--error-text); color: var(--error-text); }
+  .add-repo { padding: 9px 16px; border: 1px dashed var(--border); background: transparent; color: var(--accent); }
+  .add-repo:hover:not(:disabled) { border-color: var(--accent); }
+  .add-repo:disabled { color: var(--muted); cursor: default; }
+  /* Default button for Enter in a field: the first submit button of the form. */
+  .implicit-submit { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+{{end}}
+
+{{define "repo-rows"}}
+  <button type="submit" class="implicit-submit" tabindex="-1" aria-hidden="true"></button>
+  <div class="repo-rows" data-max="{{.Max}}">
+    {{range $i, $r := .Rows}}
+    <div class="repo-row">
+      <input name="repo" value="{{.URL}}" placeholder="https://github.com/org/repo" aria-label="Repository URL"{{if eq $i $.Focus}} autofocus{{end}}>
+      <input name="ref" value="{{.Ref}}" placeholder="branch or tag (optional)" aria-label="Branch or tag">
+      <button type="submit" name="remove" value="{{$i}}" class="remove-repo" title="Remove repository" aria-label="Remove repository">&times;</button>
+    </div>
+    {{end}}
+  </div>
+{{end}}
+
+{{define "repo-add"}}<button type="submit" name="add" value="1" class="add-repo"{{if not .CanAdd}} disabled{{end}}>+ Add repository</button>{{end}}

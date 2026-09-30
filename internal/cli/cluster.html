@@ -28,18 +28,8 @@
   main { max-width: 960px; margin: 0 auto; padding: 32px 16px 64px; }
   h1 { margin: 0 0 4px; font-size: 24px; }
   .subtitle { margin: 0 0 24px; color: var(--muted); }
-  form { display: grid; gap: 8px; margin-bottom: 24px; }
-  textarea {
-    padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; resize: vertical;
-    background: var(--surface); color: var(--text); font: 14px/1.5 ui-monospace, Menlo, monospace;
-  }
-  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  .form-foot { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+{{template "repo-css"}}
   .hint { color: var(--muted); font-size: 13px; }
-  button {
-    padding: 10px 20px; border: 0; border-radius: 8px; cursor: pointer;
-    background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600;
-  }
   .message { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; overflow-wrap: anywhere; }
   .error { background: var(--error-bg); color: var(--error-text); }
   .warnings { background: var(--warn-bg); color: var(--warn-text); }
@@ -73,13 +63,14 @@
 <body>
 <main>
   <h1>Cluster skills</h1>
-  <p class="subtitle">Group skills from several repositories by meaning with Claude. <a href="/">&larr; Back to atlas</a></p>
+  <p class="subtitle">Group skills from several repositories by meaning with Claude. <a href="/{{with .Query}}?{{.}}&amp;edit=1{{end}}">&larr; {{if .Query}}Browse these repositories{{else}}Back to atlas{{end}}</a></p>
 
   <form method="get" action="/cluster">
-    <textarea name="repos" rows="6" aria-label="Repositories, one per line" placeholder="https://github.com/org/repo&#10;https://github.com/org/other v1.2" required autofocus>{{.Repos}}</textarea>
+    {{template "repo-rows" .Form}}
     <div class="form-foot">
-      <button type="submit">Cluster skills</button>
-      <span class="hint">One repository per line: <code>&lt;url&gt;</code> or <code>&lt;url&gt; &lt;ref&gt;</code>, at most 10. Clustering may take a minute.</span>
+      {{template "repo-add" .Form}}
+      <button type="submit" class="primary">Cluster skills</button>
+      <span class="hint">At most {{.Form.Max}} repositories. Clustering may take a minute.</span>
     </div>
   </form>
 
@@ -130,6 +121,7 @@
     {{end}}
   {{end}}
 </main>
+<script src="/repos.js"></script>
 <script src="/progress.js"></script>
 </body>
 </html>

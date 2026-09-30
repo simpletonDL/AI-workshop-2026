@@ -12,8 +12,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,7 +28,7 @@ import (
 //go:embed serve.html
 var servePageHTML string
 
-var servePage = template.Must(template.New("page").Parse(servePageHTML))
+var servePage = pageTemplate("page", servePageHTML)
 
 // scanTimeout bounds how long a single request may spend cloning and scanning.
 const scanTimeout = 2 * time.Minute
@@ -127,30 +128,46 @@ func runServe(cmd *cobra.Command, opts serveOptions) error {
 type checkoutFunc func(ctx context.Context, source, ref string) (dir string, cleanup func(), err error)
 
 type pageData struct {
-	Repo     string
-	Ref      string
+	Form     repoFormView
+	Repos    []repoSpec // repositories of the form
 	Filter   string
 	Searched bool
-	Error    string
-	Skills   []skillView // skills whose name matches Filter
-	Total    int         // number of skills in the repository before filtering
+	Error    string       // error of the whole request
+	Results  []repoResult // outcome per repository
+	Skills   []skillView  // skills of all repositories whose name matches Filter
+	Total    int          // number of skills before filtering
 	Warnings []string
 	History  []historyEntry
 }
 
-// skillView is a skill together with the text of its SKILL.md.
+// Multi reports whether skills of several repositories are shown, so each
+// skill names its repository.
+func (d pageData) Multi() bool { return len(d.Results) > 1 }
+
+func (d pageData) RepoErrors() []repoResult { return repoErrors(d.Results) }
+
+// Failed reports whether no repository could be scanned.
+func (d pageData) Failed() bool { return len(d.RepoErrors()) == len(d.Results) }
+
+// Query is the repository list of the page as a query string.
+func (d pageData) Query() template.URL { return repoQuery(d.Repos) }
+
+// skillView is a skill together with its repository and the text of its
+// SKILL.md.
 type skillView struct {
 	skills.Skill
+	Repo      repoSpec
 	Text      string
 	Truncated bool
 }
 
 // historyEntry is a search that completed without an error.
 type historyEntry struct {
-	Repo  string
-	Ref   string
+	Repos []repoSpec
 	Count int
 }
+
+func (e historyEntry) Query() template.URL { return repoQuery(e.Repos) }
 
 // history keeps the most recent successful searches, newest first.
 type history struct {
@@ -158,13 +175,13 @@ type history struct {
 	entries []historyEntry
 }
 
-// add records e, moving an earlier search for the same repo and ref to the top.
+// add records e, moving an earlier search for the same repositories to the top.
 func (h *history) add(e historyEntry) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	entries := []historyEntry{e}
 	for _, old := range h.entries {
-		if old.Repo != e.Repo || old.Ref != e.Ref {
+		if !slices.Equal(old.Repos, e.Repos) {
 			entries = append(entries, old)
 		}
 	}
@@ -180,8 +197,8 @@ func (h *history) list() []historyEntry {
 	return append([]historyEntry(nil), h.entries...)
 }
 
-// newServeHandler returns the web UI handler. GET / shows the form; with a
-// ?repo= query it also clones the repository and shows its skills.
+// newServeHandler returns the web UI handler. GET / shows the form; with
+// ?repo= queries it also clones the repositories and shows their skills.
 // GET /cluster groups skills of several repositories with Claude.
 // GET /progress reports the progress of a running page request.
 func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
@@ -192,6 +209,7 @@ func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 	mux.HandleFunc("/cluster", serveCluster(checkout, cfg, &jobs))
 	mux.HandleFunc("/progress", jobs.serveProgress)
 	mux.HandleFunc("/progress.js", serveProgressJS)
+	mux.HandleFunc("/repos.js", serveReposJS)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -203,22 +221,19 @@ func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 			return
 		}
 
-		data := pageData{
-			Repo:   strings.TrimSpace(r.URL.Query().Get("repo")),
-			Ref:    strings.TrimSpace(r.URL.Query().Get("ref")),
-			Filter: strings.TrimSpace(r.URL.Query().Get("filter")),
-		}
+		q := r.URL.Query()
+		rows, edit := readRepoRows(q)
+		data := pageData{Repos: rows, Form: newRepoFormView(rows), Filter: strings.TrimSpace(q.Get("filter"))}
 		status := http.StatusOK
-		if data.Repo != "" {
+		if specs, bad := validateRepos(rows); !edit && len(specs)+len(bad) > 0 {
 			data.Searched = true
 			p, done := jobs.start(r.Header.Get(progressHeader))
-			status = scan(r.Context(), checkout, &data, p)
+			status = scan(r.Context(), checkout, &data, specs, bad, p)
 			done()
-			if data.Error == "" {
-				data.Total = len(data.Skills)
-				recent.add(historyEntry{Repo: data.Repo, Ref: data.Ref, Count: data.Total})
-				data.Skills = filterSkills(data.Skills, data.Filter)
+			if data.Error == "" && len(data.RepoErrors()) == 0 {
+				recent.add(historyEntry{Repos: data.Repos, Count: data.Total})
 			}
+			data.Skills = filterSkills(data.Skills, data.Filter)
 		}
 		data.History = recent.list()
 
@@ -230,69 +245,44 @@ func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 	return logRequests(cfg.log, mux)
 }
 
-// Progress weights of the main page: cloning dominates and advances with git's
-// progress, discovery and reading the SKILL.md files are quick.
-const (
-	scanCloneSteps    = 80
-	scanDiscoverSteps = 10
-	scanReadSteps     = 10
-)
+// mainScan weighs the work on one repository of the main page: cloning
+// dominates and advances with git's progress, discovery and reading the
+// SKILL.md files are quick.
+var mainScan = scanPlan{log: "scan", cloneSteps: 80, discoverSteps: 20, readText: true}
 
-// scan fills data with the skills of data.Repo, reporting its stages to p and
-// the log, and returns the HTTP status.
-func scan(ctx context.Context, checkout checkoutFunc, data *pageData, p *progress) int {
-	log := logFrom(ctx).With("repo", redactRepo(data.Repo), "ref", data.Ref)
-	p.setTotal(scanCloneSteps + scanDiscoverSteps + scanReadSteps)
+// scan fills data with the skills of the repositories, reporting its stages to
+// p and the log, and returns the HTTP status: an error status only if no
+// repository could be scanned.
+func scan(ctx context.Context, checkout checkoutFunc, data *pageData, specs []repoSpec, bad []repoResult, p *progress) int {
+	log := logFrom(ctx)
+	p.setTotal((mainScan.cloneSteps + mainScan.discoverSteps) * len(specs))
 	p.setStage("Validating…")
 	log.Info("scan: validating")
-	if err := validateRemote(data.Repo); err != nil {
-		log.Info("scan: invalid repository URL")
-		data.Error = err.Error()
+	if n := len(specs) + len(bad); n > maxRepos {
+		log.Info("scan: too many repositories", "repos", n)
+		data.Error = fmt.Sprintf("too many repositories (%d): at most %d are allowed", n, maxRepos)
 		return http.StatusBadRequest
 	}
+	log.Info("scan: repositories parsed", "valid", len(specs), "invalid", len(bad))
 
-	ctx, cancel := context.WithTimeout(ctx, scanTimeout)
-	defer cancel()
-
-	p.setStage(fmt.Sprintf("Cloning %s…", redactRepo(data.Repo)))
-	log.Info("scan: cloning")
-	start := time.Now()
-	clone := p.part(scanCloneSteps)
-	dir, cleanup, err := checkout(withCloneProgress(ctx, clone.set), data.Repo, data.Ref)
-	defer cleanup()
-	if err != nil {
-		log.Warn("scan: clone failed", "duration", time.Since(start).Round(time.Millisecond), "error", redactError(err, data.Repo))
-		data.Error = err.Error()
-		return http.StatusBadGateway
-	}
-	log.Info("scan: clone done", "duration", time.Since(start).Round(time.Millisecond))
-
-	clone.finish("Discovering skills…")
-	log.Info("scan: discovering skills")
-	found, warnings, err := skills.Discover(dir)
-	if err != nil {
-		log.Warn("scan: discovery failed", "error", err.Error())
-		data.Error = fmt.Sprintf("scan repository: %v", err)
-		return http.StatusInternalServerError
-	}
-	log.Info("scan: skills found", "skills", len(found), "warnings", len(warnings))
-
-	p.advance(scanDiscoverSteps, fmt.Sprintf("Reading %d SKILL.md file%s…", len(found), plural(len(found))))
-	for _, s := range found {
-		view := skillView{Skill: s}
-		view.Text, view.Truncated, err = readSkillText(filepath.Join(dir, filepath.FromSlash(s.Path)))
-		if err != nil {
-			log.Warn("scan: read SKILL.md failed", "path", s.Path, "error", err.Error())
-			data.Error = fmt.Sprintf("read %s: %v", s.Path, err)
-			return http.StatusInternalServerError
+	data.Results = append(scanRepos(ctx, checkout, specs, mainScan, p), bad...)
+	for _, res := range data.Results {
+		data.Skills = append(data.Skills, res.skills...)
+		for _, w := range res.warnings {
+			if data.Multi() {
+				w = res.Repo.String() + ": " + w
+			}
+			data.Warnings = append(data.Warnings, w)
 		}
-		data.Skills = append(data.Skills, view)
 	}
-	for _, w := range warnings {
-		data.Warnings = append(data.Warnings, w.String())
+	// Each repository is sorted by name, then path; merged, ties keep the
+	// repository order.
+	sort.SliceStable(data.Skills, func(i, j int) bool { return data.Skills[i].Name < data.Skills[j].Name })
+	data.Total = len(data.Skills)
+	log.Info("scan: done", "skills", data.Total)
+	if data.Failed() {
+		return data.Results[0].status
 	}
-	p.advance(scanReadSteps, "")
-	log.Info("scan: done")
 	return http.StatusOK
 }
 

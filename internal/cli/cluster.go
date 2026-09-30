@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -23,10 +24,7 @@ import (
 //go:embed cluster.html
 var clusterPageHTML string
 
-var clusterPage = template.Must(template.New("cluster").Parse(clusterPageHTML))
-
-// maxClusterRepos is how many repositories a single /cluster request may scan.
-const maxClusterRepos = 10
+var clusterPage = pageTemplate("cluster", clusterPageHTML)
 
 // defaultClaudeTimeout bounds a single `claude -p` call.
 const defaultClaudeTimeout = 3 * time.Minute
@@ -137,21 +135,9 @@ func truncate(s string, n int) string {
 	return strings.ToValidUTF8(s[:n], "") + "…"
 }
 
-// repoSpec is one line of the /cluster form.
-type repoSpec struct {
-	URL string
-	Ref string
-}
-
-func (r repoSpec) String() string {
-	if r.Ref == "" {
-		return r.URL
-	}
-	return r.URL + " " + r.Ref
-}
-
-// parseRepoList parses "<url>" or "<url> <ref>" lines, skipping blank lines
-// and dropping duplicates. Malformed lines are returned as per-repo errors.
+// parseRepoList parses "<url>" or "<url> <ref>" lines of the former /cluster
+// textarea (?repos=, kept for old links), skipping blank lines and dropping
+// duplicates. Malformed lines are returned as per-repo errors.
 func parseRepoList(text string) (specs []repoSpec, bad []repoResult) {
 	seen := map[repoSpec]bool{}
 	for _, line := range strings.Split(text, "\n") {
@@ -168,24 +154,23 @@ func parseRepoList(text string) (specs []repoSpec, bad []repoResult) {
 		}
 		seen[spec] = true
 		if len(fields) > 2 {
-			bad = append(bad, repoResult{Repo: spec, Error: fmt.Sprintf("invalid line %q: use \"<url>\" or \"<url> <ref>\"", strings.TrimSpace(line))})
-			continue
-		}
-		if err := validateRemote(spec.URL); err != nil {
-			bad = append(bad, repoResult{Repo: spec, Error: err.Error()})
+			bad = append(bad, repoResult{Repo: spec, Error: fmt.Sprintf("invalid line %q: use \"<url>\" or \"<url> <ref>\"", strings.TrimSpace(line)), status: http.StatusBadRequest})
 			continue
 		}
 		specs = append(specs, spec)
 	}
-	return specs, bad
+	valid, invalid := validateRepos(specs)
+	return valid, append(bad, invalid...)
 }
 
 // repoResult is the outcome of scanning one repository.
 type repoResult struct {
-	Repo   repoSpec
-	Count  int
-	Error  string
-	skills []skills.Skill
+	Repo     repoSpec
+	Count    int
+	Error    string
+	status   int // HTTP status of the error
+	skills   []skillView
+	warnings []string
 }
 
 // clusterSkill is a skill from one of the scanned repositories.
@@ -202,7 +187,8 @@ type skillCluster struct {
 }
 
 type clusterPageData struct {
-	Repos     string
+	Form      repoFormView
+	Repos     []repoSpec // repositories of the form, for links to the main page
 	Submitted bool
 	Error     string
 	Results   []repoResult
@@ -210,9 +196,14 @@ type clusterPageData struct {
 	Clusters  []skillCluster
 }
 
-func (d clusterPageData) RepoErrors() []repoResult {
+func (d clusterPageData) RepoErrors() []repoResult { return repoErrors(d.Results) }
+
+// Query is the repository list of the page as a query string.
+func (d clusterPageData) Query() template.URL { return repoQuery(d.Repos) }
+
+func repoErrors(results []repoResult) []repoResult {
 	var out []repoResult
-	for _, r := range d.Results {
+	for _, r := range results {
 		if r.Error != "" {
 			out = append(out, r)
 		}
@@ -220,7 +211,8 @@ func (d clusterPageData) RepoErrors() []repoResult {
 	return out
 }
 
-// serveCluster handles GET /cluster?repos=<one repo per line>.
+// serveCluster handles GET /cluster?repo=<url>&ref=<ref>&repo=…, and the
+// former ?repos=<one repo per line>.
 func serveCluster(checkout checkoutFunc, cfg serveConfig, jobs *progressJobs) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -228,12 +220,27 @@ func serveCluster(checkout checkoutFunc, cfg serveConfig, jobs *progressJobs) ht
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		data := clusterPageData{Repos: strings.TrimSpace(r.URL.Query().Get("repos"))}
+		q := r.URL.Query()
+		var data clusterPageData
+		var specs []repoSpec
+		var bad []repoResult
+		edit := false
+		if lines := strings.TrimSpace(q.Get("repos")); lines != "" {
+			specs, bad = parseRepoList(lines)
+			data.Repos = append(data.Repos, specs...)
+			for _, b := range bad {
+				data.Repos = append(data.Repos, b.Repo)
+			}
+		} else {
+			data.Repos, edit = readRepoRows(q)
+			specs, bad = validateRepos(data.Repos)
+		}
+		data.Form = newRepoFormView(data.Repos)
 		status := http.StatusOK
-		if data.Repos != "" {
+		if !edit && len(specs)+len(bad) > 0 {
 			data.Submitted = true
 			p, done := jobs.start(r.Header.Get(progressHeader))
-			status = clusterRepos(r.Context(), checkout, cfg, &data, p)
+			status = clusterRepos(r.Context(), checkout, cfg, &data, specs, bad, p)
 			done()
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -252,28 +259,28 @@ const (
 	clusterStepsPerRepo  = clusterCloneSteps + clusterDiscoverSteps
 )
 
-// clusterRepos scans the repositories in data.Repos, clusters their skills
-// with Claude, reporting its stages to p and the log, and returns the HTTP
-// status.
-func clusterRepos(ctx context.Context, checkout checkoutFunc, cfg serveConfig, data *clusterPageData, p *progress) int {
+var clusterScan = scanPlan{log: "cluster", cloneSteps: clusterCloneSteps, discoverSteps: clusterDiscoverSteps}
+
+// clusterRepos scans the repositories, clusters their skills with Claude,
+// reporting its stages to p and the log, and returns the HTTP status.
+func clusterRepos(ctx context.Context, checkout checkoutFunc, cfg serveConfig, data *clusterPageData, specs []repoSpec, bad []repoResult, p *progress) int {
 	log := logFrom(ctx)
 	p.setStage("Validating…")
 	log.Info("cluster: validating")
-	specs, bad := parseRepoList(data.Repos)
-	if n := len(specs) + len(bad); n > maxClusterRepos {
+	if n := len(specs) + len(bad); n > maxRepos {
 		log.Info("cluster: too many repositories", "repos", n)
-		data.Error = fmt.Sprintf("too many repositories (%d): at most %d are allowed", n, maxClusterRepos)
+		data.Error = fmt.Sprintf("too many repositories (%d): at most %d are allowed", n, maxRepos)
 		return http.StatusBadRequest
 	}
 	log.Info("cluster: repositories parsed", "valid", len(specs), "invalid", len(bad))
 	// The second half of the bar is the Claude call.
 	p.setTotal(2 * clusterStepsPerRepo * len(specs))
 
-	data.Results = append(scanRepos(ctx, checkout, specs, p), bad...)
+	data.Results = append(scanRepos(ctx, checkout, specs, clusterScan, p), bad...)
 	var all []clusterSkill
 	for _, res := range data.Results {
 		for _, s := range res.skills {
-			all = append(all, clusterSkill{Skill: s, ID: fmt.Sprintf("s%d", len(all)+1), Repo: res.Repo})
+			all = append(all, clusterSkill{Skill: s.Skill, ID: fmt.Sprintf("s%d", len(all)+1), Repo: res.Repo})
 		}
 	}
 	data.Total = len(all)
@@ -307,15 +314,24 @@ func clusterRepos(ctx context.Context, checkout checkoutFunc, cfg serveConfig, d
 	return http.StatusOK
 }
 
-// scanRepos clones and scans the repositories in parallel, keeping their order.
-func scanRepos(ctx context.Context, checkout checkoutFunc, specs []repoSpec, p *progress) []repoResult {
+// scanPlan tells scanRepos how to log and weigh the work on one repository.
+type scanPlan struct {
+	log           string // prefix of the log messages: "scan" or "cluster"
+	cloneSteps    int
+	discoverSteps int  // discovery and, with readText, reading the SKILL.md files
+	readText      bool // also read the text of every SKILL.md
+}
+
+// scanRepos clones and scans the repositories in parallel, keeping their
+// order. Each repository adds plan.cloneSteps+plan.discoverSteps to p.
+func scanRepos(ctx context.Context, checkout checkoutFunc, specs []repoSpec, plan scanPlan, p *progress) []repoResult {
 	ctx, cancel := context.WithTimeout(ctx, scanTimeout)
 	defer cancel()
 	log := logFrom(ctx)
 
 	n := len(specs)
 	if n == 1 {
-		p.setStage("Cloning 1 repository…")
+		p.setStage(fmt.Sprintf("Cloning %s…", redactRepo(specs[0].URL)))
 	} else {
 		p.setStage(fmt.Sprintf("Cloning %d repositories…", n))
 	}
@@ -333,7 +349,7 @@ func scanRepos(ctx context.Context, checkout checkoutFunc, specs []repoSpec, p *
 		mu.Lock()
 		defer mu.Unlock()
 		scanned++
-		p.advance(clusterDiscoverSteps, fmt.Sprintf("Scanned %s (%d/%d)…", repo, scanned, n))
+		p.advance(plan.discoverSteps, fmt.Sprintf("Scanned %s (%d/%d)…", repo, scanned, n))
 	}
 
 	results := make([]repoResult, len(specs))
@@ -344,36 +360,56 @@ func scanRepos(ctx context.Context, checkout checkoutFunc, specs []repoSpec, p *
 			defer wg.Done()
 			repo := redactRepo(spec.URL)
 			log := log.With("repo", repo, "ref", spec.Ref)
-			res := repoResult{Repo: spec}
-			log.Info("cluster: cloning")
+			log.Info(plan.log + ": cloning")
 			start := time.Now()
-			clone := p.part(clusterCloneSteps)
+			clone := p.part(plan.cloneSteps)
 			dir, cleanup, err := checkout(withCloneProgress(ctx, clone.set), spec.URL, spec.Ref)
 			defer cleanup()
 			if err != nil {
-				log.Warn("cluster: clone failed", "duration", time.Since(start).Round(time.Millisecond), "error", redactError(err, spec.URL))
-				res.Error = err.Error()
+				log.Warn(plan.log+": clone failed", "duration", time.Since(start).Round(time.Millisecond), "error", redactError(err, spec.URL))
+				results[i] = repoResult{Repo: spec, Error: err.Error(), status: http.StatusBadGateway}
 				cloneDone(repo, clone)
 				scanDone(repo)
-				results[i] = res
 				return
 			}
-			log.Info("cluster: clone done", "duration", time.Since(start).Round(time.Millisecond))
+			log.Info(plan.log+": clone done", "duration", time.Since(start).Round(time.Millisecond))
 			cloneDone(repo, clone)
-			log.Info("cluster: discovering skills")
-			if found, _, err := skills.Discover(dir); err != nil {
-				log.Warn("cluster: discovery failed", "error", err.Error())
-				res.Error = fmt.Sprintf("scan repository: %v", err)
-			} else {
-				log.Info("cluster: skills found", "skills", len(found))
-				res.skills, res.Count = found, len(found)
-			}
+			results[i] = scanCheckout(log, dir, spec, plan)
 			scanDone(repo)
-			results[i] = res
 		}(i, spec)
 	}
 	wg.Wait()
 	return results
+}
+
+// scanCheckout discovers the skills in dir, a checkout of spec.
+func scanCheckout(log *slog.Logger, dir string, spec repoSpec, plan scanPlan) repoResult {
+	res := repoResult{Repo: spec}
+	log.Info(plan.log + ": discovering skills")
+	found, warnings, err := skills.Discover(dir)
+	if err != nil {
+		log.Warn(plan.log+": discovery failed", "error", err.Error())
+		res.Error, res.status = fmt.Sprintf("scan repository: %v", err), http.StatusInternalServerError
+		return res
+	}
+	log.Info(plan.log+": skills found", "skills", len(found), "warnings", len(warnings))
+	for _, s := range found {
+		view := skillView{Skill: s, Repo: spec}
+		if plan.readText {
+			view.Text, view.Truncated, err = readSkillText(filepath.Join(dir, filepath.FromSlash(s.Path)))
+			if err != nil {
+				log.Warn(plan.log+": read SKILL.md failed", "path", s.Path, "error", err.Error())
+				res.Error, res.status = fmt.Sprintf("read %s: %v", s.Path, err), http.StatusInternalServerError
+				return res
+			}
+		}
+		res.skills = append(res.skills, view)
+	}
+	for _, w := range warnings {
+		res.warnings = append(res.warnings, w.String())
+	}
+	res.Count = len(res.skills)
+	return res
 }
 
 // clusterPrompt asks Claude to group the skills. Only ids, names and

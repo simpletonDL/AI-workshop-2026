@@ -35,6 +35,17 @@ func get(t *testing.T, h http.Handler, target string) (int, string) {
 	return rec.Code, rec.Body.String()
 }
 
+// rowsQuery builds the repo/ref pairs of the repository list from "<url>" or
+// "<url> <ref>" lines, as a browser submits the form.
+func rowsQuery(lines ...string) string {
+	var parts []string
+	for _, line := range lines {
+		fields := append(strings.Fields(line), "", "")
+		parts = append(parts, "repo="+url.QueryEscape(fields[0]), "ref="+url.QueryEscape(fields[1]))
+	}
+	return strings.Join(parts, "&")
+}
+
 func query(repo, ref string) string {
 	v := url.Values{"repo": {repo}}
 	if ref != "" {
@@ -200,8 +211,8 @@ func TestServeRecentSearches(t *testing.T) {
 	if strings.Contains(body, "/etc") || strings.Contains(body, "org/broken") {
 		t.Error("failed searches are recorded")
 	}
-	linkA := `href="/?repo=https%3a%2f%2fgithub.com%2forg%2fa"`
-	linkB := `href="/?repo=https%3a%2f%2fgithub.com%2forg%2fb&amp;ref=v1"`
+	linkA := `href="/?repo=https%3A%2F%2Fgithub.com%2Forg%2Fa"`
+	linkB := `href="/?repo=https%3A%2F%2Fgithub.com%2Forg%2Fb&amp;ref=v1"`
 	a, b := strings.Index(body, linkA), strings.Index(body, linkB)
 	if a < 0 || b < 0 {
 		t.Fatalf("history has no links %q and %q:\n%s", linkA, linkB, body)
@@ -220,14 +231,14 @@ func TestServeRecentSearches(t *testing.T) {
 func TestHistoryLimit(t *testing.T) {
 	var h history
 	for i := 0; i < maxHistory+5; i++ {
-		h.add(historyEntry{Repo: fmt.Sprintf("https://example.com/r%d", i)})
+		h.add(historyEntry{Repos: []repoSpec{{URL: fmt.Sprintf("https://example.com/r%d", i)}}})
 	}
 	got := h.list()
 	if len(got) != maxHistory {
 		t.Fatalf("len = %d, want %d", len(got), maxHistory)
 	}
-	if want := fmt.Sprintf("https://example.com/r%d", maxHistory+4); got[0].Repo != want {
-		t.Errorf("newest = %q, want %q", got[0].Repo, want)
+	if want := fmt.Sprintf("https://example.com/r%d", maxHistory+4); got[0].Repos[0].URL != want {
+		t.Errorf("newest = %q, want %q", got[0].Repos[0].URL, want)
 	}
 }
 
@@ -262,7 +273,7 @@ func TestServeFilterByName(t *testing.T) {
 			"<h2>Code-Review</h2>",
 			"1 of 3 skills matches &quot;" + trimmed + "&quot;",
 			`value="` + trimmed + `"`, // form keeps the filter
-			`href="/?repo=https%3a%2f%2fgithub.com%2forg%2frepo&amp;ref=v1">Clear filter`,
+			`href="/?repo=https%3A%2F%2Fgithub.com%2Forg%2Frepo&amp;ref=v1">Clear filter`,
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%q: page has no %q:\n%s", filter, want, body)
@@ -332,7 +343,7 @@ func TestServeFilterDoesNotAffectHistory(t *testing.T) {
 	get(t, h, filterQuery("https://github.com/org/repo", "", "lint"))
 	_, body := get(t, h, filterQuery("https://github.com/org/repo", "", "xyz"))
 
-	link := `href="/?repo=https%3a%2f%2fgithub.com%2forg%2frepo"`
+	link := `href="/?repo=https%3A%2F%2Fgithub.com%2Forg%2Frepo"`
 	if strings.Count(body, link) != 2 { // history entry + clear filter link
 		t.Errorf("want one history entry and a clear link %q:\n%s", link, body)
 	}

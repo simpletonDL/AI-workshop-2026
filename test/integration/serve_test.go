@@ -113,6 +113,29 @@ func TestServeListsSkills(t *testing.T) {
 	}
 }
 
+func TestServeListsSkillsOfSeveralRepos(t *testing.T) {
+	base := startServe(t)
+
+	code, body := fetchQuery(t, base, url.Values{"repo": {repoClaudeOnly, repoMultiAgent, "https://github.com/simpletonDL/no-such-repo-atlas"}})
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, body:\n%s", code, body)
+	}
+	for _, want := range []string{
+		"<h2>commit</h2>", "<h2>fh</h2>", "<h2>review</h2>",
+		repoClaudeOnly + " · .claude/skills/commit/SKILL.md",
+		repoMultiAgent + " · .cursor/skills/fh/SKILL.md",
+		"Some repositories could not be scanned", "failed to clone",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page has no %q", want)
+		}
+	}
+	// One list sorted by name across repositories: fh sits between dev and po.
+	if dev, fh, po := strings.Index(body, "<h2>dev</h2>"), strings.Index(body, "<h2>fh</h2>"), strings.Index(body, "<h2>po</h2>"); dev > fh || fh > po {
+		t.Error("skills of several repositories are not merged and sorted by name")
+	}
+}
+
 func TestServeFiltersSkillsByName(t *testing.T) {
 	base := startServe(t)
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{if .Repo}}{{.Repo}} · {{end}}atlas</title>
+<title>{{with .Repos}}{{if eq (len .) 1}}{{(index . 0).URL}}{{else}}{{len .}} repositories{{end}} · {{end}}atlas</title>
 <style>
   :root {
     --bg: #f7f7f8; --surface: #ffffff; --text: #1d1d20; --muted: #6b6b73;
@@ -27,19 +27,10 @@
   main { max-width: 960px; margin: 0 auto; padding: 32px 16px 64px; }
   h1 { margin: 0 0 4px; font-size: 24px; }
   .subtitle { margin: 0 0 24px; color: var(--muted); }
-  form { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
-  input {
-    padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
-    background: var(--surface); color: var(--text); font: inherit; min-width: 0;
-  }
-  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  input[name=repo] { flex: 1 1 360px; }
-  input[name=ref] { flex: 0 1 180px; }
-  input[name=filter] { flex: 0 1 180px; }
-  button {
-    padding: 10px 20px; border: 0; border-radius: 8px; cursor: pointer;
-    background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600;
-  }
+  .subtitle a { color: var(--accent); }
+{{template "repo-css"}}
+  input[name=filter] { flex: 1 1 200px; }
+  .form-foot .primary { margin-left: auto; }
   .message { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; overflow-wrap: anywhere; }
   .error { background: var(--error-bg); color: var(--error-text); }
   .warnings { background: var(--warn-bg); color: var(--warn-text); }
@@ -88,6 +79,7 @@
   }
   .history a:hover, .history a[aria-current] { border-color: var(--accent); }
   .history .repo { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .history .plus { color: var(--muted); }
   .history .ref, .history .count { color: var(--muted); white-space: nowrap; }
   .progress { padding: 12px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); margin-bottom: 16px; }
   .progress-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; overflow-wrap: anywhere; }
@@ -98,23 +90,25 @@
 <body>
 <main>
   <h1>atlas</h1>
-  <p class="subtitle">Browse Claude Code skills in a git repository. <a href="/cluster">Cluster skills of several repositories &rarr;</a></p>
+  <p class="subtitle">Browse Claude Code skills in git repositories. <a href="/cluster{{with .Query}}?{{.}}&amp;edit=1{{end}}">Cluster {{if .Query}}these repositories{{else}}skills of several repositories{{end}} &rarr;</a></p>
 
   <form method="get" action="/">
-    <input name="repo" value="{{.Repo}}" placeholder="https://github.com/org/repo" aria-label="Repository URL" required autofocus>
-    <input name="ref" value="{{.Ref}}" placeholder="branch or tag (optional)" aria-label="Branch or tag">
-    <input name="filter" value="{{.Filter}}" placeholder="filter by name (optional)" aria-label="Filter skills by name">
-    <button type="submit">Show skills</button>
+    {{template "repo-rows" .Form}}
+    <div class="form-foot">
+      {{template "repo-add" .Form}}
+      <input name="filter" value="{{.Filter}}" placeholder="filter by name (optional)" aria-label="Filter skills by name">
+      <button type="submit" class="primary">Show skills</button>
+    </div>
   </form>
 
   {{if .History}}
-  {{$repo := .Repo}}{{$ref := .Ref}}{{$searched := .Searched}}
+  {{$query := .Query}}{{$searched := .Searched}}
   <nav class="history" aria-label="Recent searches">
     <h3>Recent searches</h3>
     <ul>
       {{range .History}}
-      <li><a href="/?repo={{.Repo}}{{if .Ref}}&amp;ref={{.Ref}}{{end}}"{{if and $searched (eq .Repo $repo) (eq .Ref $ref)}} aria-current="page"{{end}}>
-        <span class="repo">{{.Repo}}</span>{{if .Ref}}<span class="ref">@{{.Ref}}</span>{{end}}
+      <li><a href="/?{{.Query}}"{{if and $searched (eq .Query $query)}} aria-current="page"{{end}}>
+        {{range $i, $r := .Repos}}{{if $i}}<span class="plus">+</span>{{end}}<span class="repo">{{.URL}}</span>{{if .Ref}}<span class="ref">@{{.Ref}}</span>{{end}}{{end}}
         <span class="count">{{.Count}} skill{{if ne .Count 1}}s{{end}}</span>
       </a></li>
       {{end}}
@@ -125,6 +119,17 @@
   {{if .Error}}
   <div class="message error" role="alert">{{.Error}}</div>
   {{else if .Searched}}
+    {{with .RepoErrors}}
+    {{if and $.Failed (eq (len .) 1)}}
+    <div class="message error" role="alert">{{(index . 0).Error}}</div>
+    {{else}}
+    <div class="message {{if $.Failed}}error{{else}}warnings{{end}}" role="alert">
+      {{if $.Failed}}No repository could be scanned:{{else}}Some repositories could not be scanned:{{end}}
+      <ul>{{range .}}<li><strong>{{.Repo}}</strong>: {{.Error}}</li>{{end}}</ul>
+    </div>
+    {{end}}
+    {{end}}
+    {{if not .Failed}}
     {{if .Warnings}}
     <div class="message warnings">
       Some SKILL.md files could not be fully parsed:
@@ -133,17 +138,18 @@
     {{end}}
     {{if .Skills}}
     {{if .Filter}}
-    <div class="summary">{{len .Skills}} of {{.Total}} skill{{if ne .Total 1}}s{{end}} match{{if eq (len .Skills) 1}}es{{end}} &quot;{{.Filter}}&quot;<a href="/?repo={{.Repo}}{{if .Ref}}&amp;ref={{.Ref}}{{end}}">Clear filter</a></div>
+    <div class="summary">{{len .Skills}} of {{.Total}} skill{{if ne .Total 1}}s{{end}} match{{if eq (len .Skills) 1}}es{{end}} &quot;{{.Filter}}&quot;<a href="/?{{.Query}}">Clear filter</a></div>
     {{else}}
-    <div class="summary">{{len .Skills}} skill{{if ne (len .Skills) 1}}s{{end}} found</div>
+    <div class="summary">{{len .Skills}} skill{{if ne (len .Skills) 1}}s{{end}} found{{if .Multi}} in {{len .Results}} repositories{{end}}</div>
     {{end}}
+    {{$multi := .Multi}}
     <div class="skills">
       {{range .Skills}}
       <details class="skill">
         <summary>
           <div class="head"><h2>{{.Name}}</h2><span class="hint">click to view SKILL.md</span></div>
           {{if .Description}}<p>{{.Description}}</p>{{else}}<p class="no-description">No description</p>{{end}}
-          <div class="path">{{.Path}}</div>
+          <div class="path">{{if $multi}}{{.Repo}} · {{end}}{{.Path}}</div>
         </summary>
         <div class="skill-text">
           <pre>{{.Text}}</pre>
@@ -153,12 +159,14 @@
       {{end}}
     </div>
     {{else if and .Filter .Total}}
-    <div class="message empty">No skills match &quot;{{.Filter}}&quot; ({{.Total}} skill{{if ne .Total 1}}s{{end}} in total)<a href="/?repo={{.Repo}}{{if .Ref}}&amp;ref={{.Ref}}{{end}}">Clear filter</a></div>
+    <div class="message empty">No skills match &quot;{{.Filter}}&quot; ({{.Total}} skill{{if ne .Total 1}}s{{end}} in total)<a href="/?{{.Query}}">Clear filter</a></div>
     {{else}}
     <div class="message empty">No skills found</div>
     {{end}}
+    {{end}}
   {{end}}
 </main>
+<script src="/repos.js"></script>
 <script src="/progress.js"></script>
 </body>
 </html>
