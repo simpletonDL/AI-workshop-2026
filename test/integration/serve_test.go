@@ -121,3 +121,43 @@ func TestServeFiltersSkillsByName(t *testing.T) {
 		t.Error("filtered searches are recorded as separate history entries")
 	}
 }
+
+func TestServeReportsProgress(t *testing.T) {
+	base := startServe(t)
+	const id = "integration-progress-0001"
+	client := &http.Client{Timeout: 2 * time.Minute}
+
+	req, err := http.NewRequest(http.MethodGet, base+"/?"+url.Values{"repo": {repoClaudeOnly}}.Encode(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Atlas-Progress", id)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "<h2>review</h2>") {
+		t.Fatalf("status = %d, body:\n%s", resp.StatusCode, body)
+	}
+
+	resp, err = client.Get(base + "/progress?id=" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(progress), `"percent":100`) || !strings.Contains(string(progress), `"done":true`) {
+		t.Errorf("progress after the page: status = %d, body %s", resp.StatusCode, progress)
+	}
+
+	resp, err = client.Get(base + "/progress.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("/progress.js status = %d", resp.StatusCode)
+	}
+}

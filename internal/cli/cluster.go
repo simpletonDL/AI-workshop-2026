@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -45,6 +47,13 @@ type serveOption func(*serveConfig)
 type serveConfig struct {
 	claude        claudeRunner
 	claudeTimeout time.Duration
+	log           *slog.Logger
+}
+
+// withLogger sets the logger of the web service. Without it nothing is
+// logged; `atlas serve` logs to stderr.
+func withLogger(log *slog.Logger) serveOption {
+	return func(c *serveConfig) { c.log = log }
 }
 
 // withClaude sets the runner used by /cluster and the timeout of one call.
@@ -61,6 +70,7 @@ func newServeConfig(opts []serveOption) serveConfig {
 	cfg := serveConfig{
 		claude:        claudeCLI("claude"),
 		claudeTimeout: defaultClaudeTimeout,
+		log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -211,7 +221,7 @@ func (d clusterPageData) RepoErrors() []repoResult {
 }
 
 // serveCluster handles GET /cluster?repos=<one repo per line>.
-func serveCluster(checkout checkoutFunc, cfg serveConfig) http.HandlerFunc {
+func serveCluster(checkout checkoutFunc, cfg serveConfig, jobs *progressJobs) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -222,7 +232,9 @@ func serveCluster(checkout checkoutFunc, cfg serveConfig) http.HandlerFunc {
 		status := http.StatusOK
 		if data.Repos != "" {
 			data.Submitted = true
-			status = clusterRepos(r.Context(), checkout, cfg, &data)
+			p, done := jobs.start(r.Header.Get(progressHeader))
+			status = clusterRepos(r.Context(), checkout, cfg, &data, p)
+			done()
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(status)
@@ -231,16 +243,28 @@ func serveCluster(checkout checkoutFunc, cfg serveConfig) http.HandlerFunc {
 	}
 }
 
+// Progress weights of /cluster: cloning and discovery are one step each per
+// repository; the Claude call weighs as much as all of them together.
+const clusterStepsPerRepo = 2
+
 // clusterRepos scans the repositories in data.Repos, clusters their skills
-// with Claude and returns the HTTP status.
-func clusterRepos(ctx context.Context, checkout checkoutFunc, cfg serveConfig, data *clusterPageData) int {
+// with Claude, reporting its stages to p and the log, and returns the HTTP
+// status.
+func clusterRepos(ctx context.Context, checkout checkoutFunc, cfg serveConfig, data *clusterPageData, p *progress) int {
+	log := logFrom(ctx)
+	p.setStage("Validating…")
+	log.Info("cluster: validating")
 	specs, bad := parseRepoList(data.Repos)
 	if n := len(specs) + len(bad); n > maxClusterRepos {
+		log.Info("cluster: too many repositories", "repos", n)
 		data.Error = fmt.Sprintf("too many repositories (%d): at most %d are allowed", n, maxClusterRepos)
 		return http.StatusBadRequest
 	}
+	log.Info("cluster: repositories parsed", "valid", len(specs), "invalid", len(bad))
+	// The second half of the bar is the Claude call.
+	p.setTotal(2 * clusterStepsPerRepo * len(specs))
 
-	data.Results = append(scanRepos(ctx, checkout, specs), bad...)
+	data.Results = append(scanRepos(ctx, checkout, specs, p), bad...)
 	var all []clusterSkill
 	for _, res := range data.Results {
 		for _, s := range res.skills {
@@ -248,6 +272,7 @@ func clusterRepos(ctx context.Context, checkout checkoutFunc, cfg serveConfig, d
 		}
 	}
 	data.Total = len(all)
+	log.Info("cluster: skills found", "skills", len(all))
 	if len(specs) == 0 {
 		data.Error = "no valid repositories to scan"
 		return http.StatusBadRequest
@@ -258,23 +283,51 @@ func clusterRepos(ctx context.Context, checkout checkoutFunc, cfg serveConfig, d
 
 	ctx, cancel := context.WithTimeout(ctx, cfg.claudeTimeout)
 	defer cancel()
+	p.setStage(fmt.Sprintf("Clustering %d skill%s with Claude…", len(all), plural(len(all))))
+	log.Info("cluster: calling Claude", "skills", len(all))
+	start := time.Now()
 	answer, err := cfg.claude(ctx, clusterPrompt(all))
 	if err != nil {
+		log.Warn("cluster: Claude failed", "duration", time.Since(start).Round(time.Millisecond), "error", err.Error())
 		data.Error = err.Error()
 		return http.StatusBadGateway
 	}
 	data.Clusters, err = parseClusters(answer, all)
 	if err != nil {
+		log.Warn("cluster: invalid Claude answer", "duration", time.Since(start).Round(time.Millisecond), "error", truncate(err.Error(), 200))
 		data.Error = err.Error()
 		return http.StatusBadGateway
 	}
+	log.Info("cluster: Claude done", "duration", time.Since(start).Round(time.Millisecond), "clusters", len(data.Clusters))
 	return http.StatusOK
 }
 
 // scanRepos clones and scans the repositories in parallel, keeping their order.
-func scanRepos(ctx context.Context, checkout checkoutFunc, specs []repoSpec) []repoResult {
+func scanRepos(ctx context.Context, checkout checkoutFunc, specs []repoSpec, p *progress) []repoResult {
 	ctx, cancel := context.WithTimeout(ctx, scanTimeout)
 	defer cancel()
+	log := logFrom(ctx)
+
+	n := len(specs)
+	if n == 1 {
+		p.setStage("Cloning 1 repository…")
+	} else {
+		p.setStage(fmt.Sprintf("Cloning %d repositories…", n))
+	}
+	var mu sync.Mutex
+	cloned, scanned := 0, 0
+	// step records a finished clone or discovery of repo and moves the stage on.
+	step := func(repo string, clone bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if clone {
+			cloned++
+			p.advance(1, fmt.Sprintf("Cloned %s (%d/%d), discovering skills…", repo, cloned, n))
+		} else {
+			scanned++
+			p.advance(1, fmt.Sprintf("Scanned %s (%d/%d)…", repo, scanned, n))
+		}
+	}
 
 	results := make([]repoResult, len(specs))
 	var wg sync.WaitGroup
@@ -282,16 +335,32 @@ func scanRepos(ctx context.Context, checkout checkoutFunc, specs []repoSpec) []r
 		wg.Add(1)
 		go func(i int, spec repoSpec) {
 			defer wg.Done()
+			repo := redactRepo(spec.URL)
+			log := log.With("repo", repo, "ref", spec.Ref)
 			res := repoResult{Repo: spec}
+			log.Info("cluster: cloning")
+			start := time.Now()
 			dir, cleanup, err := checkout(ctx, spec.URL, spec.Ref)
 			defer cleanup()
 			if err != nil {
+				log.Warn("cluster: clone failed", "duration", time.Since(start).Round(time.Millisecond), "error", redactError(err, spec.URL))
 				res.Error = err.Error()
-			} else if found, _, err := skills.Discover(dir); err != nil {
+				step(repo, true)
+				step(repo, false)
+				results[i] = res
+				return
+			}
+			log.Info("cluster: clone done", "duration", time.Since(start).Round(time.Millisecond))
+			step(repo, true)
+			log.Info("cluster: discovering skills")
+			if found, _, err := skills.Discover(dir); err != nil {
+				log.Warn("cluster: discovery failed", "error", err.Error())
 				res.Error = fmt.Sprintf("scan repository: %v", err)
 			} else {
+				log.Info("cluster: skills found", "skills", len(found))
 				res.skills, res.Count = found, len(found)
 			}
+			step(repo, false)
 			results[i] = res
 		}(i, spec)
 	}
