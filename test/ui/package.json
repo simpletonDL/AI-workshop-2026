@@ -1,0 +1,9 @@
+{
+  "name": "atlas-ui-tests",
+  "private": true,
+  "type": "module",
+  "description": "Screenshot UI tests of atlas serve (run with scripts/ui-test.sh)",
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}
