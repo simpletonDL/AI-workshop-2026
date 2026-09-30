@@ -4,3 +4,5 @@
 logs
 demo/node_modules/
 demo/out/
+test/ui/node_modules/
+test/ui/out/

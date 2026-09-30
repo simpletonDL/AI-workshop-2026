@@ -100,12 +100,14 @@ Starts a local web service with a simple browser UI for viewing the skills of on
   internal/skills/         # SKILL.md discovery and parsing
   test/integration/        # integration tests
   demo/                    # web UI demo recorder (Node, Playwright) and scenarios; not part of the build
+  test/ui/                  # UI screenshot tests (Node, Playwright); not part of the build
   ```
 - Unit tests for skill discovery and parsing, for the web UI handler (repository list: several repositories, add/remove without JavaScript, links between pages; skill text, recent searches, name filter, clustering with a fake Claude runner — unit tests never call the real Claude, progress tracking and the `/progress` endpoint, logging), and for the repository cache (hit/miss, TTL, eviction, concurrent requests cloning once, cache hits through the progress stages — with a fake clone function and a local git repository).
-- Integration tests (build tag `integration`, `make test-integration`) check the whole pipeline: they build the `atlas` binary and run it against small real public GitHub repositories (clone → discovery → parsing → output). The `/cluster` integration tests pass a fake `claude` script via `--claude-bin` that prints a canned JSON envelope, so CI needs neither Claude nor an API key. Both unit and integration tests run in CI (GitHub Actions).
+- Integration tests (build tag `integration`, `make test-integration`) check the whole pipeline: they build the `atlas` binary and run it against small real public GitHub repositories (clone → discovery → parsing → output). The `/cluster` integration tests pass a fake `claude` script via `--claude-bin` that prints a canned JSON envelope, so CI needs neither Claude nor an API key. - UI tests (`test/ui/`, Playwright, `make test-ui` → `scripts/ui-test.sh`) replay deterministic browser scenarios and compare screenshots at key moments with committed baselines (`test/ui/__screenshots__/`). Everything a screenshot shows is fixed: fixture repositories served by a local git server on a fixed port (a clone can be held to catch a progress stage), a fresh `atlas serve` per test, a fake `claude`, viewport, locale and time zone; the dancer stands still (`prefers-reduced-motion`) except in his own test, which seeds `Math.random` and steps a paused fake clock. Tests run in the Playwright Docker image, so fonts and rendering match locally and in CI; `scripts/ui-test.sh --update` re-renders the baselines after an intended UI change.
+- Unit, integration and UI tests run in CI (GitHub Actions).
 
 ## Installation
 - `go install github.com/<org>/atlas/cmd/atlas@latest`
 - `scripts/install.sh` — installs from a local clone (`go install ./cmd/atlas`), checks that Go is installed and that `$(go env GOPATH)/bin` is in `PATH`.
-- `Makefile`: `build`, `install`, `test`, `test-integration`.
+- `Makefile`: `build`, `install`, `test`, `test-integration`, `test-ui` (needs Docker).
 - `scripts/demo-record.sh <scenario>` — records a web UI demo GIF (Node + Playwright, see `.claude/skills/demo`).
