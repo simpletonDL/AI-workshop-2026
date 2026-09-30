@@ -48,6 +48,9 @@ After the local tests (`make test`, `make test-integration`) pass:
    If a PR for the branch already exists, just push — don't create a second one.
 5. Only report the task as done after CI is green and the PR is open.
 
+If the change is visible in the web UI (`atlas serve`), record a demo and put it into the PR body —
+the `demo` skill (`.claude/skills/demo/SKILL.md`).
+
 Do not poll CI manually with repeated `gh run list` calls — use the script.
 
 ## Headless run: final report
