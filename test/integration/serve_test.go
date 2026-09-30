@@ -52,8 +52,13 @@ func startServe(t *testing.T) string {
 
 func fetch(t *testing.T, base, repo string) (int, string) {
 	t.Helper()
+	return fetchQuery(t, base, url.Values{"repo": {repo}})
+}
+
+func fetchQuery(t *testing.T, base string, q url.Values) (int, string) {
+	t.Helper()
 	client := &http.Client{Timeout: 2 * time.Minute}
-	resp, err := client.Get(base + "/?" + url.Values{"repo": {repo}}.Encode())
+	resp, err := client.Get(base + "/?" + q.Encode())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,5 +95,28 @@ func TestServeListsSkills(t *testing.T) {
 	}
 	if !strings.Contains(body, "Recent searches") || strings.Count(body, `<span class="repo">`) != 1 {
 		t.Error("history does not show exactly the one successful search")
+	}
+}
+
+func TestServeFiltersSkillsByName(t *testing.T) {
+	base := startServe(t)
+
+	code, body := fetchQuery(t, base, url.Values{"repo": {repoClaudeOnly}, "filter": {"REVIEW"}})
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, body:\n%s", code, body)
+	}
+	if !strings.Contains(body, "<h2>review</h2>") || strings.Contains(body, "<h2>commit</h2>") {
+		t.Error("filter does not keep only matching skills")
+	}
+	if !strings.Contains(body, "Clear filter") {
+		t.Error("page has no clear filter link")
+	}
+
+	_, body = fetchQuery(t, base, url.Values{"repo": {repoClaudeOnly}, "filter": {"no-such-skill"}})
+	if !strings.Contains(body, "No skills match &quot;no-such-skill&quot;") {
+		t.Error("page has no \"no matches\" message")
+	}
+	if strings.Count(body, `<span class="repo">`) != 1 {
+		t.Error("filtered searches are recorded as separate history entries")
 	}
 }

@@ -97,9 +97,11 @@ type checkoutFunc func(ctx context.Context, source, ref string) (dir string, cle
 type pageData struct {
 	Repo     string
 	Ref      string
+	Filter   string
 	Searched bool
 	Error    string
-	Skills   []skillView
+	Skills   []skillView // skills whose name matches Filter
+	Total    int         // number of skills in the repository before filtering
 	Warnings []string
 	History  []historyEntry
 }
@@ -163,15 +165,18 @@ func newServeHandler(checkout checkoutFunc) http.Handler {
 		}
 
 		data := pageData{
-			Repo: strings.TrimSpace(r.URL.Query().Get("repo")),
-			Ref:  strings.TrimSpace(r.URL.Query().Get("ref")),
+			Repo:   strings.TrimSpace(r.URL.Query().Get("repo")),
+			Ref:    strings.TrimSpace(r.URL.Query().Get("ref")),
+			Filter: strings.TrimSpace(r.URL.Query().Get("filter")),
 		}
 		status := http.StatusOK
 		if data.Repo != "" {
 			data.Searched = true
 			status = scan(r.Context(), checkout, &data)
 			if data.Error == "" {
-				recent.add(historyEntry{Repo: data.Repo, Ref: data.Ref, Count: len(data.Skills)})
+				data.Total = len(data.Skills)
+				recent.add(historyEntry{Repo: data.Repo, Ref: data.Ref, Count: data.Total})
+				data.Skills = filterSkills(data.Skills, data.Filter)
 			}
 		}
 		data.History = recent.list()
@@ -219,6 +224,22 @@ func scan(ctx context.Context, checkout checkoutFunc, data *pageData) int {
 		data.Warnings = append(data.Warnings, w.String())
 	}
 	return http.StatusOK
+}
+
+// filterSkills returns the skills whose name contains filter, ignoring case.
+// An empty filter matches every skill.
+func filterSkills(all []skillView, filter string) []skillView {
+	if filter == "" {
+		return all
+	}
+	filter = strings.ToLower(filter)
+	var matched []skillView
+	for _, s := range all {
+		if strings.Contains(strings.ToLower(s.Name), filter) {
+			matched = append(matched, s)
+		}
+	}
+	return matched
 }
 
 // readSkillText returns up to maxSkillText bytes of the file at p.
