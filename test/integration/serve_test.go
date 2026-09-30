@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -18,8 +20,20 @@ import (
 // its base URL.
 func startServe(t *testing.T, flags ...string) string {
 	t.Helper()
+	base, _ := startServeCmd(t, nil, flags...)
+	return base
+}
+
+// startServeCmd is startServe that sends the server's logs (stderr) to
+// stderr and also returns the running command.
+func startServeCmd(t *testing.T, stderr io.Writer, flags ...string) (string, *exec.Cmd) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, atlasBin, append([]string{"serve", "--addr", "127.0.0.1:0"}, flags...)...)
+	cmd.Stderr = stderr
+	// Interrupt instead of kill, so the server shuts down cleanly.
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = 10 * time.Second
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -44,10 +58,10 @@ func startServe(t *testing.T, flags ...string) string {
 		if !strings.HasPrefix(line, prefix) {
 			t.Fatalf("unexpected serve output %q", line)
 		}
-		return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		return strings.TrimSpace(strings.TrimPrefix(line, prefix)), cmd
 	case <-time.After(10 * time.Second):
 		t.Fatal("atlas serve did not start")
-		return ""
+		return "", nil
 	}
 }
 
@@ -159,5 +173,64 @@ func TestServeReportsProgress(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("/progress.js status = %d", resp.StatusCode)
+	}
+}
+
+// syncBuffer is a string buffer safe for a concurrent writer and reader.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestServeReusesClonedRepository(t *testing.T) {
+	cacheDir := t.TempDir()
+	var logs syncBuffer
+	base, cmd := startServeCmd(t, &logs, "--cache-dir", cacheDir)
+
+	for i := 0; i < 2; i++ {
+		if code, body := fetch(t, base, repoClaudeOnly); code != http.StatusOK || !strings.Contains(body, "<h2>review</h2>") {
+			t.Fatalf("request %d: status = %d, body:\n%s", i, code, body)
+		}
+	}
+	if n := strings.Count(logs.String(), "repo cache miss"); n != 1 {
+		t.Errorf("repository cloned %d times, want 1; logs:\n%s", n, logs.String())
+	}
+	if !strings.Contains(logs.String(), "repo cache hit") {
+		t.Errorf("second request is not a cache hit; logs:\n%s", logs.String())
+	}
+	if entries, _ := os.ReadDir(cacheDir); len(entries) != 1 {
+		t.Errorf("cache dir has %d entries, want 1 per-process dir", len(entries))
+	}
+
+	// On shutdown the server removes its checkouts.
+	_ = cmd.Process.Signal(os.Interrupt)
+	_ = cmd.Wait()
+	if entries, _ := os.ReadDir(cacheDir); len(entries) != 0 {
+		t.Errorf("cache dir not cleaned up on shutdown: %v", entries)
+	}
+}
+
+func TestServeCacheDisabled(t *testing.T) {
+	var logs syncBuffer
+	base, _ := startServeCmd(t, &logs, "--cache-ttl", "0")
+	for i := 0; i < 2; i++ {
+		if code, _ := fetch(t, base, repoClaudeOnly); code != http.StatusOK {
+			t.Fatalf("request %d: status = %d", i, code)
+		}
+	}
+	if strings.Contains(logs.String(), "repo cache") {
+		t.Errorf("cache used with --cache-ttl 0; logs:\n%s", logs.String())
 	}
 }

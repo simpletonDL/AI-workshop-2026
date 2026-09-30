@@ -42,6 +42,9 @@ type serveOptions struct {
 	addr          string
 	claudeBin     string
 	claudeTimeout time.Duration
+	cacheDir      string
+	cacheTTL      time.Duration
+	cacheSize     int
 }
 
 func newServeCommand() *cobra.Command {
@@ -53,7 +56,9 @@ func newServeCommand() *cobra.Command {
 (and optionally a branch or tag) to see the skills it contains.`,
 		Example: `  atlas serve
   atlas serve --addr 127.0.0.1:9000
-  atlas serve --claude-bin /usr/local/bin/claude`,
+  atlas serve --claude-bin /usr/local/bin/claude
+  atlas serve --cache-ttl 1h --cache-size 100
+  atlas serve --cache-ttl 0   # clone on every request`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runServe(cmd, opts)
@@ -62,6 +67,9 @@ func newServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&opts.addr, "addr", "localhost:8080", "listen address (host:port)")
 	cmd.Flags().StringVar(&opts.claudeBin, "claude-bin", "claude", "Claude Code CLI used by /cluster")
 	cmd.Flags().DurationVar(&opts.claudeTimeout, "claude-timeout", defaultClaudeTimeout, "timeout of one Claude call on /cluster")
+	cmd.Flags().StringVar(&opts.cacheDir, "cache-dir", "", "parent directory of the cloned repositories cache (defaults to the system temp directory)")
+	cmd.Flags().DurationVar(&opts.cacheTTL, "cache-ttl", defaultCacheTTL, "how long a cloned repository is reused before it is cloned again (0 disables the cache)")
+	cmd.Flags().IntVar(&opts.cacheSize, "cache-size", defaultCacheMaxEntries, "maximum number of cached repositories")
 	return cmd
 }
 
@@ -69,14 +77,30 @@ func runServe(cmd *cobra.Command, opts serveOptions) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	if opts.cacheTTL < 0 {
+		return errors.New("--cache-ttl must not be negative")
+	}
+	// One logger for requests, their stages and the repository cache.
+	log := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil))
+	co := checkoutFunc(checkout)
+	if opts.cacheTTL > 0 {
+		cache, err := newRepoCache(opts.cacheDir, opts.cacheTTL, opts.cacheSize, gitClone, log)
+		if err != nil {
+			return err
+		}
+		// Runs after the server has shut down, so no request reads a checkout.
+		defer cache.Close()
+		co = cache.checkout
+	}
+
 	ln, err := net.Listen("tcp", opts.addr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", opts.addr, err)
 	}
 	srv := &http.Server{
-		Handler: newServeHandler(checkout,
+		Handler: newServeHandler(co,
 			withClaude(claudeCLI(opts.claudeBin), opts.claudeTimeout),
-			withLogger(slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil)))),
+			withLogger(log)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Serving atlas on http://%s\n", ln.Addr())

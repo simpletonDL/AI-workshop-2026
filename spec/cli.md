@@ -58,11 +58,24 @@ Starts a local web service with a simple browser UI for viewing a repository's s
 - **Logging:** the server logs to stderr with `log/slog` (text format, level INFO); the `Serving atlas on …` line stays on stdout.
   - Every request: `request started` (method, path) and `request finished` (method, path, status, duration), with a request number `req` shared by all lines of that request. Only the path is logged, not the query. `/progress` and `/progress.js` requests are logged at DEBUG level (hidden by default) so polling doesn't flood the log.
   - Stages of work: main page — `scan: validating`, `scan: cloning`, `scan: clone done` / `scan: clone failed` (duration, error), `scan: discovering skills`, `scan: skills found` (count), `scan: done`; `/cluster` — `cluster: validating`, `cluster: repositories parsed` (valid/invalid counts), per repository `cluster: cloning`, `cluster: clone done` / `cluster: clone failed` (duration), `cluster: discovering skills`, `cluster: skills found`, then `cluster: calling Claude` (number of skills), `cluster: Claude done` (duration, number of clusters) or `cluster: Claude failed` / `cluster: invalid Claude answer` (duration, error).
+  - Repository cache (one logger for everything, no separate setup): `repo cache hit`, `repo cache miss, cloning`, `repo cache expired, cloning again` (repo, ref; inside the request, with its `req`, between `scan: cloning`/`cluster: cloning` and the matching `clone done`) and `repo cache evict` (checkout directory).
   - No secrets or contents are logged: repository URLs (also inside error messages) have user info removed, and neither `SKILL.md` texts nor the Claude prompt/answer are logged.
+- **Repository cache:** the web UI (main page and `/cluster`) reuses cloned repositories instead of cloning them on every request. `list-skills` is not affected: it always clones into a temp directory and removes it.
+  - **Key:** normalized repository URL + ref. Normalization lowercases the scheme and host and drops trailing `/` and `.git`, so `https://GitHub.com/org/repo.git` and `https://github.com/org/repo` share an entry; different refs (including an empty ref, the default branch) are separate entries. The directory of an entry is named after a SHA-256 hash of the key, so user input never becomes a path.
+  - **Freshness:** a checkout is reused for `--cache-ttl` (default `10m`) after it was cloned; the next request after that clones it again (fresh shallow clone, the old checkout is removed). `--cache-ttl 0` disables the cache: every request clones into a temp directory, as before.
+  - **Size:** at most `--cache-size` repositories (default 50) are kept; adding one more evicts the least recently used.
+  - **Concurrency:** concurrent requests for the same repository + ref (including parallel clones on `/cluster`) clone it once: the others wait and reuse the result, or get the same clone error. A checkout is never re-cloned or removed while a request is reading it — refresh and eviction wait until those requests finish.
+  - **Errors:** failed clones are not cached; the next request tries again.
+  - **Location:** each server process creates its own directory `atlas-cache-*` under `--cache-dir` (defaults to the system temp directory) and removes it on shutdown (SIGINT/SIGTERM). The cache is not reused across restarts; a crashed server leaves its directory behind, to be cleaned up with the rest of the temp directory.
+  - **Logging:** through the server's logger (see **Logging** above).
+  - **Progress:** a cache hit returns the checkout immediately, so the cloning stage completes at once and the request goes on through the usual stages to 100%.
 - **Flags:**
   - `--addr <host:port>` — listen address (defaults to `localhost:8080`);
   - `--claude-bin <path>` — Claude Code CLI used by `/cluster` (defaults to `claude`, looked up in `PATH`);
-  - `--claude-timeout <duration>` — timeout of one Claude call (defaults to `3m`).
+  - `--claude-timeout <duration>` — timeout of one Claude call (defaults to `3m`);
+  - `--cache-dir <path>` — parent directory of the repository cache (defaults to the system temp directory);
+  - `--cache-ttl <duration>` — how long a cloned repository is reused (defaults to `10m`, `0` disables the cache);
+  - `--cache-size <n>` — maximum number of cached repositories (defaults to 50).
 
 ## Technical requirements
 - Go 1.22+, CLI built with [cobra](https://github.com/spf13/cobra).
@@ -76,7 +89,7 @@ Starts a local web service with a simple browser UI for viewing a repository's s
   internal/skills/         # SKILL.md discovery and parsing
   test/integration/        # integration tests
   ```
-- Unit tests for skill discovery and parsing, and for the web UI handler (skill text, recent searches, name filter, clustering with a fake Claude runner — unit tests never call the real Claude, progress tracking and the `/progress` endpoint, logging).
+- Unit tests for skill discovery and parsing, for the web UI handler (skill text, recent searches, name filter, clustering with a fake Claude runner — unit tests never call the real Claude, progress tracking and the `/progress` endpoint, logging), and for the repository cache (hit/miss, TTL, eviction, concurrent requests cloning once, cache hits through the progress stages — with a fake clone function and a local git repository).
 - Integration tests (build tag `integration`, `make test-integration`) check the whole pipeline: they build the `atlas` binary and run it against small real public GitHub repositories (clone → discovery → parsing → output). The `/cluster` integration tests pass a fake `claude` script via `--claude-bin` that prints a canned JSON envelope, so CI needs neither Claude nor an API key. Both unit and integration tests run in CI (GitHub Actions).
 
 ## Installation
