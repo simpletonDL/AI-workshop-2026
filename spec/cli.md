@@ -24,6 +24,14 @@ Clones the repository (shallow, into a temp directory), finds all skills and pri
   - `--json` — JSON output: `[{"name", "description", "path"}]`.
 - **Errors:** invalid URL / clone failure — message to stderr, non-zero exit code. No skills found — prints `No skills found`, exit code 0.
 
+### `atlas serve`
+Starts a local web service with a simple browser UI for viewing a repository's skills.
+
+- **UI:** a page with an input for the repository URL (and an optional ref). On submit it shows the same results as `list-skills` (name, description, path), rendered as a clean, readable table or card list.
+- **Errors:** clone failures and "no skills found" are shown as messages in the UI.
+- **Flags:**
+  - `--addr <host:port>` — listen address (defaults to `localhost:8080`).
+
 ## Technical requirements
 - Go 1.22+, CLI built with [cobra](https://github.com/spf13/cobra).
 - Cloning via system `git` (or `go-git`).
