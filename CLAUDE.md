@@ -1,38 +1,32 @@
-# Roles
-Work is split between an **orchestrator** and **task agents**. Determine your role first:
+# Task workflow
+This is the default way to work on a task. Running several tasks in parallel in sandboxes is a separate
+mode — the `orchestrate` skill (`.claude/skills/orchestrate/SKILL.md`); use it only when the user asks for it.
 
-- `.git` in the working directory is a **directory** (the main repo root) — you are the **orchestrator**.
-- `.git` is a **file** (a git worktree) — you are a **task agent**.
+## Does the task change code?
+First decide what kind of task it is:
 
-# Orchestrator
-The orchestrator only delegates. It **does not do tasks itself**: no code or spec edits, no commits, no running tests, no PRs.
+- **Research / questions / analysis** — read the code, specs, logs, docs, the issue tracker, and answer.
+  Nothing in the repository changes. **Do not run the pipeline**: no branch, no commits, no tests, no push, no CI, no PR.
+  Just give the answer.
+- **Code change** — anything that edits code, specs, tests, scripts or configs in the repository.
+  Run the full pipeline below.
 
-1. Split the user's request into independent tasks. Each task gets a short kebab-case name — it becomes the branch, worktree and sandbox name.
-2. For each task, create a worktree and a sandbox and start a task agent there:
-   ```
-   scripts/sbx-claude.sh <name> "<task description>"
-   ```
-   The script creates the worktree `../<name>` on branch `<name>` from `origin/main` (or reuses it), creates the sandbox `<name>` (or reuses it) and runs Claude Code headless (`claude -p`) in it on the task. Run it with `run_in_background` — a task takes longer than the Bash timeout — so several agents work in parallel.
-   - The task description must be self-contained: the agent does not see this conversation. Include the goal, relevant context and acceptance criteria.
-3. **Getting the result.** When the agent finishes, the background command completes and its output is the agent's final report (see *Final report* below). The same report is saved to `logs/<name>.log`. Read the `STATUS` line — the script's exit code only says whether Claude ran, not whether the task succeeded.
-4. Verify the report instead of trusting it: `gh pr view <name> --json url,state,statusCheckRollup`.
-5. Report to the user: for each task — the branch, the PR URL and the CI result. If an agent failed, say so and why; don't fix it yourself — start a follow-up task agent instead (the same `<name>` reuses the worktree and sandbox; the new task must say what was already done and what went wrong).
+If a research task turns out to need a code change, say so and switch to the pipeline only then.
 
-Do not remove worktrees or sandboxes unless the user asks.
+## Pipeline (code changes only)
 
-# Task agent
-A task agent works on exactly one task, in its own worktree and branch.
-
-## Core rule
+### Core rule
 1. **Read the spec first.**
 2. **Always check the tests.** Run the tests after making changes. If the tests are red, the task is **not considered done**.
-3. **Every task ends with a PR.** A task is done only when CI is green for the pushed commit and the PR is open.
+3. **Every code change ends with a PR.** The task is done only when CI is green for the pushed commit and the PR is open.
 
-## Git workflow
-1. The worktree is already on the task branch, created from `origin/main`. Stay on it: never switch branches and never commit to `main`.
+### Git workflow
+1. Never commit to `main`. If you are on `main` (the main repo root), create a task branch first:
+   `git fetch origin && git switch -c <name> origin/main` (`<name>` — a short kebab-case task name).
+   In a git worktree (`.git` is a file) you are already on the task branch, created from `origin/main` — stay on it, never switch branches.
 2. Do the work. Commit to the branch as you go.
 
-## CI workflow
+### CI workflow
 After the local tests (`make test`, `make test-integration`) pass:
 
 1. Commit the changes and push the branch: `git push -u origin HEAD` (you are allowed to do this without asking).
@@ -49,15 +43,18 @@ After the local tests (`make test`, `make test-integration`) pass:
 
 Do not poll CI manually with repeated `gh run list` calls — use the script.
 
-## Final report
-The agent runs headless: its **last message is the only thing the orchestrator receives**. Nobody can answer questions, so don't ask any — make a reasonable decision and mention it in the report. The last message must be exactly this format:
+## Headless run: final report
+If you run headless in a sandbox (`claude -p`, started by the `orchestrate` skill via `scripts/sbx-claude.sh`),
+your **last message is the only thing the orchestrator receives**. Nobody can answer questions, so don't ask any —
+make a reasonable decision and mention it in the report. The last message must be exactly this format:
 ```
 STATUS: DONE | FAILED
 BRANCH: <branch>
-COMMIT: <sha>
+COMMIT: <sha or none>
 CI: GREEN | RED | NOT RUN
 PR: <url or none>
-SUMMARY: <what was done, decisions made on your own>
+SUMMARY: <what was done / the answer for a research task, decisions made on your own>
 PROBLEMS: <why it failed / what is left; "none" if DONE>
 ```
-`STATUS: DONE` only when CI is green and the PR is open; otherwise `FAILED`.
+For a code change, `STATUS: DONE` only when CI is green and the PR is open; otherwise `FAILED`.
+For a research task (no code changes), `STATUS: DONE` with `CI: NOT RUN`, `PR: none`, and the answer in `SUMMARY`.
