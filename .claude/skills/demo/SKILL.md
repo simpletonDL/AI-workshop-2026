@@ -6,6 +6,7 @@ description: Record a video/GIF demo of a web UI change in `atlas serve` (Playwr
 # Web UI demo
 A demo is a **scenario script** replayed in headless Chromium against a freshly built `atlas serve`.
 Never record by hand: the scenario is reviewable, re-runnable and doubles as an e2e check.
+Everything runs in the `atlas-demo` Docker image (`demo/Dockerfile`): the host needs only Docker.
 
 ## Steps
 1. Write `demo/scenarios/<name>.mjs` (`<name>` — kebab-case, the feature). Show the feature in 10–30 s, following the spec:
@@ -24,11 +25,15 @@ Never record by hand: the scenario is reviewable, re-runnable and doubles as an 
    - `type(sel, text)` — **always use it for text input**: clicks the field and types key by key, never `fill`;
    - `screenshot(label)` — PNG next to the video.
    Wait for real states (`waitForSelector`), not fixed sleeps; add `pause` only so a viewer can read.
+   Random UI behaviour (the dancer): seed `Math.random` with `demo.page.addInitScript` before `goto`.
    Use small, stable public repos (see `memory/gotcha-integration-test-repos.md`); for `/cluster` pass a fake
    `--claude-bin` (as in the tests) so the demo doesn't depend on a real model.
-2. Record locally: `scripts/demo-record.sh <name> [-- <atlas serve flags>]`. It builds `bin/atlas`, starts
-   `serve` on a free port, writes `demo/out/<name>.{webm,gif}` and the PNGs (`demo/out/` is ignored by git).
-   A failed step exits non-zero and leaves `<name>-error.png`.
+2. Record: `scripts/demo-record.sh <name> [-- <atlas serve flags>]`. It builds the image (the first time takes
+   a minute or two), a Linux `atlas`, runs `serve` and the scenario in the container and writes
+   `demo/out/<name>.{webm,gif}` and the PNGs (`demo/out/` is ignored by git). Serve flags run with the repo root
+   (read-only) as working directory, so file paths in them must be inside the repo.
+   A failed step exits non-zero and leaves `<name>-error.png`. If recording fails for a reason you can't fix,
+   say so in the PR's **Demo** section — never drop the demo silently.
 3. **Check it:** `Read` the PNGs (`-final.png` and your labels). If they show an error, an empty page or the
    wrong state — fix the code or the scenario and record again. Never attach a demo you haven't looked at.
 4. Publish: `scripts/demo-record.sh --publish <name>`. It pushes the GIF to the orphan branch `demo-assets`
