@@ -158,6 +158,9 @@
 
   function frame(now) {
     if (!el.isConnected) return; // the page was replaced (progress.js)
+    // All times come from the frame timestamps, so a seeded run under a fake clock
+    // (UI tests) doesn't depend on how far the clock got before the page loaded.
+    if (!last) modeUntil = now + 2500;
     var dt = last ? Math.min(0.05, (now - last) / 1000) : 0;
     last = now;
     width = el.offsetWidth;
@@ -181,6 +184,5 @@
     requestAnimationFrame(frame);
   }
 
-  modeUntil = performance.now() + 2500;
   requestAnimationFrame(frame);
 })();
