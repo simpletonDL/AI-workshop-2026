@@ -15,10 +15,23 @@ SERVE_LOG=/tmp/atlas-serve.log
 
 log() { echo "[startup $(date +%H:%M:%S)] $*"; }
 
-# Put the Go bin directory (go install ./cmd/atlas) on PATH for agent shells.
+# make is not in the base image and sudo is unavailable: unpack the Ubuntu package into ~/.local.
+export PATH="$HOME/.local/bin:$PATH"
+if ! command -v make >/dev/null 2>&1; then
+  log "installing make into ~/.local"
+  tmp=$(mktemp -d)
+  (cd "$tmp" && apt-get download make)
+  dpkg-deb -x "$tmp"/make_*.deb "$HOME/.local/opt/make"
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$HOME/.local/opt/make/usr/bin/make" "$HOME/.local/bin/make"
+  rm -rf "$tmp"
+fi
+log "$(make --version | head -1)"
+
+# Put ~/.local/bin (make) and the Go bin directory (go install ./cmd/atlas) on PATH for agent shells.
 env_file="$HOME/.atlas-env.sh"
 cat >"$env_file" <<EOF
-export PATH="\$PATH:$(go env GOPATH)/bin"
+export PATH="\$HOME/.local/bin:\$PATH:$(go env GOPATH)/bin"
 EOF
 hook="[ -f \"$env_file\" ] && . \"$env_file\" # atlas-env"
 profile=
