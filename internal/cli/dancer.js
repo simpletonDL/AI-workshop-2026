@@ -17,19 +17,47 @@
     foreL = part(".fore-l"), foreR = part(".fore-r"), tie = part(".tie"),
     finger = part(".finger"), flap = part(".flap"), say = part(".dancer-say");
 
+  // Real Trump quotes (verbatim, sometimes trimmed), grouped by what he is doing.
   var quips = {
     walk: [
-      "Tremendous skills. The best skills.",
-      "Nobody reads SKILL.md like me. Nobody.",
-      "Many people are saying this is the best UI.",
-      "Bigly!",
-      "Covfefe.",
-      "Make Atlas Great Again!",
-      "I know clustering. I have the best clusters."
+      "Our army manned the air, it rammed the ramparts, it took over the airports.", // July 4th speech, 2019
+      "People are flushing toilets 10 times, 15 times, as opposed to once.", // White House roundtable, 2019
+      "And they say the noise causes cancer.", // on windmills, 2019
+      "It's freezing and snowing in New York - we need global warming!", // tweet, 2012
+      "The late, great Hannibal Lecter.", // rallies, 2024
+      "They're eating the dogs. They're eating the cats.", // debate, 2024
+      "I'll take electrocution every single time. I'm not getting near the shark!", // rally, 2024
+      "Despite the constant negative press covfefe", // tweet, 2017
+      "Over 1000 hamberders etc.", // tweet, 2019
+      "Airplanes are becoming far too complex to fly.", // tweet, 2019
+      "Nobody knew health care could be so complicated.", // 2017
+      "Essentially, it's a large real estate deal.", // on buying Greenland, 2019
+      "I'm speaking with myself, number one, because I have a very good brain.", // MSNBC, 2016
+      "I think I'm much more humble than you would understand.", // 60 Minutes, 2016
+      "I know words. I have the best words." // rally, 2015
     ],
-    dance: ["Y.M.C.A.!", "Look at these moves. Incredible.", "They love me in /cluster."],
-    squat: ["Low energy? Not me!", "Perfect squats. Ask anyone.", "Strong legs. The strongest."],
-    point: ["You're fired!", "Fake news!", "Wrong!"]
+    dance: [
+      "We're going to win so much, you're going to be so sick and tired of winning.", // rally, 2016
+      "I am the chosen one.", // 2019
+      "To me, the most beautiful word in the dictionary is tariff.", // Economic Club of Chicago, 2024
+      "The beauty of me is that I'm very rich.", // Good Morning America, 2011
+      "I alone can fix it." // RNC, 2016
+    ],
+    squat: [
+      "Person, woman, man, camera, TV.", // on his cognitive test, 2020
+      "I'm, like, a really smart person.", // 2016
+      "A very stable genius at that!", // tweet, 2018
+      "Sorry losers and haters, but my I.Q. is one of the highest - and you all know it!", // tweet, 2013
+      "My fingers are long and beautiful, as, it has been well documented, are various other parts of my body." // New York Post, 2011
+    ],
+    point: [
+      "You're fired!", // The Apprentice
+      "Wrong.", // debate, 2016
+      "Fake news!",
+      "I have concepts of a plan.", // debate, 2024
+      "I know more about ISIS than the generals do, believe me.", // rally, 2015
+      "Nobody builds walls better than me, believe me." // campaign launch, 2015
+    ]
   };
 
   function pick(a) { return a[Math.floor(Math.random() * a.length)]; }
@@ -47,7 +75,7 @@
   function talk(now, text) {
     say.textContent = text;
     say.classList.add("on");
-    sayUntil = now + 2600;
+    sayUntil = now + 1500 + 55 * text.length; // long quotes stay longer
   }
 
   function next(now) {
