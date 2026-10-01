@@ -257,3 +257,40 @@ func TestServeCacheDisabled(t *testing.T) {
 		t.Errorf("cache used with --cache-ttl 0; logs:\n%s", logs.String())
 	}
 }
+
+func TestServeStarsSkills(t *testing.T) {
+	base := startServe(t)
+	// No redirects: the 303 back to the page is checked as is.
+	client := &http.Client{Timeout: 2 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	star := func(path, value string) int {
+		t.Helper()
+		resp, err := client.PostForm(base+"/star", url.Values{"repo": {repoClaudeOnly}, "path": {path}, "star": {value}, "back": {"/?repo=x"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusSeeOther && resp.Header.Get("Location") != "/?repo=x" {
+			t.Errorf("Location = %q, want /?repo=x", resp.Header.Get("Location"))
+		}
+		return resp.StatusCode
+	}
+
+	if code := star(".claude/skills/review/SKILL.md", "1"); code != http.StatusSeeOther {
+		t.Fatalf("star: status = %d, want 303", code)
+	}
+	if code := star(".claude/skills/no-such-skill/SKILL.md", "1"); code != http.StatusNotFound {
+		t.Errorf("unknown skill: status = %d, want 404", code)
+	}
+	_, body := fetch(t, base, repoClaudeOnly)
+	if !strings.Contains(body, `<nav class="bananas chips"`) || !strings.Contains(body, `<span class="name">review</span>`) ||
+		strings.Count(body, `aria-pressed="true"`) != 1 {
+		t.Errorf("review is not starred:\n%s", body)
+	}
+
+	if code := star(".claude/skills/review/SKILL.md", "0"); code != http.StatusSeeOther {
+		t.Fatalf("unstar: status = %d, want 303", code)
+	}
+	if _, body = fetch(t, base, repoClaudeOnly); strings.Contains(body, `aria-pressed="true"`) {
+		t.Error("banana was not taken back")
+	}
+}
