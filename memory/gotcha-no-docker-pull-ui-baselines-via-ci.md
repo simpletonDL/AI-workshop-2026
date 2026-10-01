@@ -7,6 +7,7 @@ Symptom: `scripts/ui-test.sh` fails on `docker pull` (403), `npx playwright inst
 policy", `gh run download` of `ui-report` is 403 (artifacts live on Azure blob storage). npm and `gh run view --log` work.
 Workaround: a throwaway branch whose workflow runs `scripts/ui-test.sh --update`, then `scripts/ui-test.sh`
 (proves the baselines are stable), and prints `tar czf - test/ui/__screenshots__ | base64` between markers;
-decode from `gh run view --job=<id> --log`, delete the branch. `--update-snapshots=all` re-renders every file with
+decode from `gh run view --job=<id> --log` (take only the lines between the echoed `BASELINES-BEGIN`/`-END` output lines —
+the log also contains the script text with the same words; strip the `…Z ` timestamp prefix), delete the branch. `--update-snapshots=all` re-renders every file with
 anti-aliasing noise (passes Playwright's threshold) — commit only the baselines of screens the change affects.
 No local Chromium also means no `demo` GIF: put the new baselines (commit URLs) into the PR's Demo section.
