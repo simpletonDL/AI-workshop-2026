@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Record a web UI demo: build atlas, start `atlas serve`, run demo/scenarios/<scenario>.mjs
-# in headless Chromium, write demo/out/<scenario>.{webm,gif,*.png}.
+# Record a web UI demo: build atlas and the demo image (demo/Dockerfile), run `atlas serve` and
+# demo/scenarios/<scenario>.mjs in headless Chromium inside it, write demo/out/<scenario>.{webm,gif,*.png}.
+# Only Docker is needed on the host; proxy variables of the host are passed through.
+# Serve flags run inside the container with the repository root as working directory (read-only).
 # With --publish, push the GIF to the orphan branch "demo-assets" and print a markdown image for the PR body.
 # Usage: scripts/demo-record.sh [--publish] <scenario> [-- <extra atlas serve flags>]
 set -euo pipefail
@@ -16,29 +18,27 @@ demo="$root/demo"
 out="$demo/out"
 [ -f "$demo/scenarios/$scenario.mjs" ] || { echo "no scenario: demo/scenarios/$scenario.mjs" >&2; exit 1; }
 
-if [ ! -d "$demo/node_modules" ]; then
-  npm ci --prefix "$demo" --silent
-fi
-(cd "$demo" && npx --no-install playwright install chromium >/dev/null)
-
-make -C "$root" build >/dev/null
-
 tmp=$(mktemp -d)
-log="$tmp/serve.log"
-"$root/bin/atlas" serve --addr 127.0.0.1:0 --cache-dir "$tmp" "$@" >"$log" 2>&1 &
-pid=$!
-trap 'kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true; rm -rf "$tmp"' EXIT
+trap 'rm -rf "$tmp"' EXIT
 
-url=""
-for _ in $(seq 1 50); do
-  url=$(sed -n 's/^Serving atlas on \(http[^ ]*\).*/\1/p' "$log")
-  [ -n "$url" ] && break
-  kill -0 "$pid" 2>/dev/null || { cat "$log" >&2; exit 1; }
-  sleep 0.1
+proxy_build=() proxy_run=()
+for v in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
+  [ -n "${!v:-}" ] && proxy_build+=(--build-arg "$v") && proxy_run+=(-e "$v")
 done
-[ -n "$url" ] || { echo "atlas serve did not start" >&2; cat "$log" >&2; exit 1; }
+docker build -q -t atlas-demo ${proxy_build[@]+"${proxy_build[@]}"} "$demo" >"$tmp/build.log" 2>&1 ||
+  { cat "$tmp/build.log" >&2; exit 1; }
 
-node "$demo/record.mjs" "$scenario" "$url" "$out"
+arch=$(docker version --format '{{.Server.Arch}}')
+GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go build -C "$root" -o "bin/atlas-linux-$arch" ./cmd/atlas
+
+# record.mjs runs from /opt/demo to use the image's node_modules, not the host's.
+mkdir -p "$out"
+docker run --rm --init --ipc=host -u "$(id -u):$(id -g)" -e HOME=/tmp ${proxy_run[@]+"${proxy_run[@]}"} \
+  -v "$root:/work:ro" -w /work -v "$out:/out" \
+  -v "$root/bin/atlas-linux-$arch:/usr/local/bin/atlas:ro" \
+  -v "$demo/run.sh:/opt/demo/run.sh:ro" -v "$demo/record.mjs:/opt/demo/record.mjs:ro" \
+  -v "$demo/scenarios:/opt/demo/scenarios:ro" \
+  atlas-demo /opt/demo/run.sh "$scenario" "$@"
 
 $publish || exit 0
 
