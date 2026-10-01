@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{with .Repos}}{{if eq (len .) 1}}{{(index . 0).URL}}{{else}}{{len .}} repositories{{end}} · {{end}}atlas</title>
+<title>{{with .Title}}{{.}} · {{end}}atlas</title>
 <style>
   :root {
     --bg: #f7f7f8; --surface: #ffffff; --text: #1d1d20; --muted: #6b6b73;
@@ -31,6 +31,9 @@
 {{template "repo-css"}}
 {{template "dancer-css"}}
   input[name=filter] { flex: 1 1 200px; }
+  .org-row { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+  .org-row label { color: var(--muted); }
+  .org-row input { flex: 1 1 360px; }
   .form-foot .primary { margin-left: auto; }
   .message { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; overflow-wrap: anywhere; }
   .error { background: var(--error-bg); color: var(--error-text); }
@@ -123,10 +126,14 @@
 {{template "dancer"}}
 <main>
   <h1>atlas</h1>
-  <p class="subtitle">Browse Claude Code skills in git repositories. <a href="/cluster{{with .Query}}?{{.}}&amp;edit=1{{end}}">Cluster {{if .Query}}these repositories{{else}}skills of several repositories{{end}} &rarr;</a></p>
+  <p class="subtitle">Browse Claude Code skills in git repositories. <a href="/cluster{{with .RepoQuery}}?{{.}}&amp;edit=1{{end}}">Cluster {{if .RepoQuery}}these repositories{{else}}skills of several repositories{{end}} &rarr;</a></p>
 
   <form method="get" action="/">
     {{template "repo-rows" .Form}}
+    <div class="org-row">
+      <label for="org">or a whole GitHub organization</label>
+      <input id="org" name="org" value="{{.Org}}" placeholder="https://github.com/org">
+    </div>
     <div class="form-foot">
       {{template "repo-add" .Form}}
       <input name="filter" value="{{.Filter}}" placeholder="filter by name (optional)" aria-label="Filter skills by name">
@@ -142,6 +149,7 @@
       {{range .History}}
       <li><a href="/?{{.Query}}"{{if and $searched (eq .Query $query)}} aria-current="page"{{end}}>
         {{range $i, $r := .Repos}}{{if $i}}<span class="plus">+</span>{{end}}<span class="repo">{{.URL}}</span>{{if .Ref}}<span class="ref">@{{.Ref}}</span>{{end}}{{end}}
+        {{if .Org}}{{if .Repos}}<span class="plus">+</span>{{end}}<span class="repo">{{.Org}}</span><span class="ref">organization</span>{{end}}
         <span class="count">{{.Count}} skill{{if ne .Count 1}}s{{end}}</span>
       </a></li>
       {{end}}
@@ -164,6 +172,9 @@
     {{end}}
     {{end}}
     {{if not .Failed}}
+    {{if .OrgTruncated}}
+    <div class="message warnings">Only the {{.OrgMax}} most recently pushed repositories of {{.Org}} were scanned.</div>
+    {{end}}
     {{if .Warnings}}
     <div class="message warnings">
       Some SKILL.md files could not be fully parsed:
@@ -174,7 +185,7 @@
     {{if .Filter}}
     <div class="summary">{{len .Skills}} of {{.Total}} skill{{if ne .Total 1}}s{{end}} match{{if eq (len .Skills) 1}}es{{end}} &quot;{{.Filter}}&quot;<a href="/?{{.Query}}">Clear filter</a></div>
     {{else}}
-    <div class="summary">{{len .Skills}} skill{{if ne (len .Skills) 1}}s{{end}} found{{if .Multi}} in {{len .Results}} repositories{{end}}</div>
+    <div class="summary">{{len .Skills}} skill{{if ne (len .Skills) 1}}s{{end}} found{{if .Org}} in {{.WithSkills}} of {{len .Results}} repositor{{if eq (len .Results) 1}}y{{else}}ies{{end}}{{else if .Multi}} in {{len .Results}} repositories{{end}}</div>
     {{end}}
     {{$multi := .Multi}}
     <div class="skills">
