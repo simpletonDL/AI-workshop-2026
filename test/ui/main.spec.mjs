@@ -73,3 +73,25 @@ test('clone failure', async ({ page }) => {
   await expect(page.locator('.message.error')).toContainText('failed to clone');
   await shot(page, 'clone-failure');
 });
+
+test('bananas: star skills, list them, take one back', async ({ page }) => {
+  const page1 = '/?' + new URLSearchParams({ repo: repo('alpha') });
+  await page.goto(page1);
+  const banana = (name) => page.locator(`.skill-card:has(h2:text-is("${name}")) button.banana`);
+  await banana('deploy').click();
+  await expect(banana('deploy')).toHaveAttribute('aria-pressed', 'true');
+  await banana('code-review').click();
+  await expect(page.locator('nav.bananas li')).toHaveCount(2);
+  await page.mouse.move(0, 0);
+  await shot(page, 'bananas');
+
+  // The list survives a reload and links to the skill.
+  await page.goto('/');
+  await page.click('nav.bananas a:has-text("deploy")');
+  await expect(page.locator('.summary')).toContainText('1 of 4 skills matches "deploy"');
+  await banana('deploy').click();
+  await expect(banana('deploy')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('nav.bananas li')).toHaveCount(1);
+  await page.mouse.move(0, 0);
+  await shot(page, 'banana-taken-back');
+});

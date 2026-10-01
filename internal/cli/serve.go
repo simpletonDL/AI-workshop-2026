@@ -138,6 +138,8 @@ type pageData struct {
 	Total    int          // number of skills before filtering
 	Warnings []string
 	History  []historyEntry
+	Stars    []starEntry
+	Back     string // this page, where a star form returns to
 }
 
 // Multi reports whether skills of several repositories are shown, so each
@@ -159,6 +161,7 @@ type skillView struct {
 	Repo      repoSpec
 	Text      string
 	Truncated bool
+	Starred   bool
 }
 
 // historyEntry is a search that completed without an error.
@@ -201,9 +204,11 @@ func (h *history) list() []historyEntry {
 // ?repo= queries it also clones the repositories and shows their skills.
 // GET /cluster groups skills of several repositories with Claude.
 // GET /progress reports the progress of a running page request.
+// POST /star gives a skill a banana (a star) or takes it back.
 func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 	cfg := newServeConfig(opts)
 	var recent history
+	var starred stars
 	var jobs progressJobs
 	mux := http.NewServeMux()
 	mux.HandleFunc("/cluster", serveCluster(checkout, cfg, &jobs))
@@ -211,6 +216,8 @@ func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 	mux.HandleFunc("/progress.js", serveProgressJS)
 	mux.HandleFunc("/repos.js", serveReposJS)
 	mux.HandleFunc("/dancer.js", serveDancerJS)
+	mux.HandleFunc("/star", serveStar(checkout, &starred))
+	mux.HandleFunc("/stars.js", serveStarsJS)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -224,7 +231,7 @@ func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 
 		q := r.URL.Query()
 		rows, edit := readRepoRows(q)
-		data := pageData{Repos: rows, Form: newRepoFormView(rows), Filter: strings.TrimSpace(q.Get("filter"))}
+		data := pageData{Repos: rows, Form: newRepoFormView(rows), Filter: strings.TrimSpace(q.Get("filter")), Back: r.URL.RequestURI()}
 		status := http.StatusOK
 		if specs, bad := validateRepos(rows); !edit && len(specs)+len(bad) > 0 {
 			data.Searched = true
@@ -235,8 +242,10 @@ func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 				recent.add(historyEntry{Repos: data.Repos, Count: data.Total})
 			}
 			data.Skills = filterSkills(data.Skills, data.Filter)
+			starred.mark(data.Skills)
 		}
 		data.History = recent.list()
+		data.Stars = starred.list()
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(status)
