@@ -9,4 +9,5 @@ blob.core.windows.net. `make` is not installed (run the `go test` commands from 
 Workaround that worked: a temporary commit makes the `ui` job run `scripts/ui-test.sh --update` and print
 `tar -czf - __screenshots__ | base64 -w 4000` between markers; `gh run view --job <id> --log` (logs are reachable),
 decode, `Read` the PNGs, commit only the ones whose tests failed (`--update=all` rewrites passing ones with new
-bytes), restore the workflow. Demo GIFs can't be recorded here — link the new baselines in the PR instead.
+bytes; `--update-snapshots=changed` rewrites only failing ones), restore the workflow. Demo GIFs do record here
+now (`scripts/demo-record.sh` builds from Docker Hub) — [[decision-web-ui-demos]].
