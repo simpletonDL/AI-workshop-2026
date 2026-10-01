@@ -19,7 +19,7 @@ import (
 // Defaults of the `atlas serve` repository cache.
 const (
 	defaultCacheTTL        = 10 * time.Minute
-	defaultCacheMaxEntries = 50
+	defaultCacheMaxEntries = 500
 )
 
 // cloneFunc shallow-clones source at ref into dest. gitClone in production,

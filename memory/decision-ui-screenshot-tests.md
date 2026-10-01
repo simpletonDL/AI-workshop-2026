@@ -6,7 +6,8 @@ description: UI tests = Playwright screenshots in the Playwright Docker image; l
 `test/ui/` compares screenshots at key moments with baselines. What made them deterministic:
 - repositories come from `test/ui/fixtures/repos`, served by `git http-backend` behind a Node server on the
   fixed port 47123 (URLs are on the screenshots; serve rejects `file://`, and dumb HTTP can't do `--depth 1`);
-- `git.hold(name)` delays a repository's requests, so the progress bar is caught at `Cloning …` 0%;
+- `git.hold(name)` delays a repository's requests, so the progress bar is caught at `Cloning …` 0%; the same
+  server fakes the GitHub API at `/api` (`--github-api`), `git.hold('api')` catches `Listing repositories…`;
 - the dancer: `reducedMotion: 'reduce'` everywhere except `dancer.spec.mjs`, which seeds `Math.random`
   (init script) and uses `page.clock.install` + `pauseAt` before `goto`, then `runFor` to each moment;
 - rendering: the host (macOS) renders fonts differently, so tests only run in Docker; arm64 and amd64

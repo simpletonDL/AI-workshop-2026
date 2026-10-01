@@ -1,4 +1,4 @@
-// Main page: scan with progress, skill text, filter, several repositories, errors, history.
+// Main page: scan with progress, skill text, filter, several repositories, organization, errors, history.
 import { test, expect, repo } from './harness.mjs';
 
 const shot = (page, name) => expect(page).toHaveScreenshot(`${name}.png`, { fullPage: true });
@@ -94,4 +94,21 @@ test('bananas: star skills, list them, take one back', async ({ page }) => {
   await expect(page.locator('nav.bananas li')).toHaveCount(1);
   await page.mouse.move(0, 0);
   await shot(page, 'banana-taken-back');
+});
+
+test('organization: listing progress, results, history', async ({ page, git }) => {
+  await page.goto('/');
+  await page.fill('input[name=org]', 'fixtures');
+  const release = git.hold('api');
+  await page.click('button.primary');
+  await expect(page.locator('.progress-stage')).toHaveText('Listing repositories of fixtures…');
+  await shot(page, 'org-progress');
+  release();
+
+  await expect(page.locator('.summary')).toHaveText('6 skills found in 2 of 3 repositories');
+  await shot(page, 'org-results');
+
+  await page.goto('/');
+  await expect(page.locator('nav.history li')).toHaveCount(1);
+  await shot(page, 'org-history');
 });

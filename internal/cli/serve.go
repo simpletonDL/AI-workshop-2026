@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"regexp"
@@ -33,6 +34,9 @@ var servePage = pageTemplate("page", servePageHTML)
 // scanTimeout bounds how long a single request may spend cloning and scanning.
 const scanTimeout = 2 * time.Minute
 
+// orgScanTimeout is scanTimeout for a request that scans an organization.
+const orgScanTimeout = 5 * time.Minute
+
 // maxSkillText is how much of a SKILL.md is shown in the UI.
 const maxSkillText = 256 << 10
 
@@ -46,6 +50,8 @@ type serveOptions struct {
 	cacheDir      string
 	cacheTTL      time.Duration
 	cacheSize     int
+	githubAPI     string
+	orgMaxRepos   int
 }
 
 func newServeCommand() *cobra.Command {
@@ -54,7 +60,11 @@ func newServeCommand() *cobra.Command {
 		Use:   "serve",
 		Short: "Start a web UI for listing skills in a git repository",
 		Long: `Starts a local web server. Open it in a browser, enter a repository URL
-(and optionally a branch or tag) to see the skills it contains.`,
+(and optionally a branch or tag) or a GitHub organization to see the skills
+it contains.
+
+Organizations are listed with the GitHub API; set GITHUB_TOKEN (or GH_TOKEN)
+to raise its rate limit from 60 to 5000 calls per hour.`,
 		Example: `  atlas serve
   atlas serve --addr 127.0.0.1:9000
   atlas serve --claude-bin /usr/local/bin/claude
@@ -71,6 +81,8 @@ func newServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&opts.cacheDir, "cache-dir", "", "parent directory of the cloned repositories cache (defaults to the system temp directory)")
 	cmd.Flags().DurationVar(&opts.cacheTTL, "cache-ttl", defaultCacheTTL, "how long a cloned repository is reused before it is cloned again (0 disables the cache)")
 	cmd.Flags().IntVar(&opts.cacheSize, "cache-size", defaultCacheMaxEntries, "maximum number of cached repositories")
+	cmd.Flags().StringVar(&opts.githubAPI, "github-api", defaultGitHubAPI, "GitHub API used to list organizations (GitHub Enterprise: https://<host>/api/v3)")
+	cmd.Flags().IntVar(&opts.orgMaxRepos, "org-max-repos", defaultOrgMaxRepos, "maximum number of repositories scanned per organization (most recently pushed first)")
 	return cmd
 }
 
@@ -80,6 +92,14 @@ func runServe(cmd *cobra.Command, opts serveOptions) error {
 
 	if opts.cacheTTL < 0 {
 		return errors.New("--cache-ttl must not be negative")
+	}
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		token = os.Getenv("GH_TOKEN")
+	}
+	orgs, err := newGitHubOrgs(opts.githubAPI, token, opts.orgMaxRepos, opts.cacheTTL)
+	if err != nil {
+		return err
 	}
 	// One logger for requests, their stages and the repository cache.
 	log := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil))
@@ -101,6 +121,7 @@ func runServe(cmd *cobra.Command, opts serveOptions) error {
 	srv := &http.Server{
 		Handler: newServeHandler(co,
 			withClaude(claudeCLI(opts.claudeBin), opts.claudeTimeout),
+			withGitHub(orgs),
 			withLogger(log)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -130,6 +151,7 @@ type checkoutFunc func(ctx context.Context, source, ref string) (dir string, cle
 type pageData struct {
 	Form     repoFormView
 	Repos    []repoSpec // repositories of the form
+	Org      string     // GitHub organization of the form
 	Filter   string
 	Searched bool
 	Error    string       // error of the whole request
@@ -140,19 +162,76 @@ type pageData struct {
 	History  []historyEntry
 	Stars    []starEntry
 	Back     string // this page, where a star form returns to
+
+	OrgTruncated bool // only the OrgMax most recently pushed repositories were scanned
+	OrgMax       int
 }
 
-// Multi reports whether skills of several repositories are shown, so each
-// skill names its repository.
-func (d pageData) Multi() bool { return len(d.Results) > 1 }
+// Multi reports whether skills of several repositories (or of an
+// organization) are shown, so each skill names its repository.
+func (d pageData) Multi() bool { return len(d.Results) > 1 || d.Org != "" }
 
 func (d pageData) RepoErrors() []repoResult { return repoErrors(d.Results) }
 
 // Failed reports whether no repository could be scanned.
-func (d pageData) Failed() bool { return len(d.RepoErrors()) == len(d.Results) }
+func (d pageData) Failed() bool {
+	n := len(d.RepoErrors())
+	return n > 0 && n == len(d.Results)
+}
 
-// Query is the repository list of the page as a query string.
-func (d pageData) Query() template.URL { return repoQuery(d.Repos) }
+// Query is the repository list and organization of the page as a query
+// string.
+func (d pageData) Query() template.URL { return pageQuery(d.Repos, d.Org) }
+
+// RepoQuery is the repository list alone, for the /cluster link.
+func (d pageData) RepoQuery() template.URL { return repoQuery(d.Repos) }
+
+// WithSkills is the number of scanned repositories that have skills.
+func (d pageData) WithSkills() int {
+	n := 0
+	for _, r := range d.Results {
+		if r.Count > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// Title is the page title without the "atlas" suffix.
+func (d pageData) Title() string {
+	var urls []string
+	for _, r := range d.Repos {
+		if r.URL != "" { // a new blank row of the form
+			urls = append(urls, r.URL)
+		}
+	}
+	n := len(urls)
+	repos := fmt.Sprintf("%d repositories", n)
+	if n == 1 {
+		repos = urls[0]
+	}
+	switch {
+	case d.Org != "" && n > 0:
+		return d.Org + " organization + " + repos
+	case d.Org != "":
+		return d.Org + " organization"
+	case n > 0:
+		return repos
+	}
+	return ""
+}
+
+// pageQuery returns the query of the main page for rows and org.
+func pageQuery(rows []repoSpec, org string) template.URL {
+	q := repoQuery(rows)
+	if org == "" {
+		return q
+	}
+	if q != "" {
+		q += "&"
+	}
+	return q + template.URL("org="+url.QueryEscape(org))
+}
 
 // skillView is a skill together with its repository and the text of its
 // SKILL.md.
@@ -167,10 +246,11 @@ type skillView struct {
 // historyEntry is a search that completed without an error.
 type historyEntry struct {
 	Repos []repoSpec
+	Org   string
 	Count int
 }
 
-func (e historyEntry) Query() template.URL { return repoQuery(e.Repos) }
+func (e historyEntry) Query() template.URL { return pageQuery(e.Repos, e.Org) }
 
 // history keeps the most recent successful searches, newest first.
 type history struct {
@@ -184,7 +264,7 @@ func (h *history) add(e historyEntry) {
 	defer h.mu.Unlock()
 	entries := []historyEntry{e}
 	for _, old := range h.entries {
-		if !slices.Equal(old.Repos, e.Repos) {
+		if !slices.Equal(old.Repos, e.Repos) || old.Org != e.Org {
 			entries = append(entries, old)
 		}
 	}
@@ -231,15 +311,16 @@ func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 
 		q := r.URL.Query()
 		rows, edit := readRepoRows(q)
-		data := pageData{Repos: rows, Form: newRepoFormView(rows), Filter: strings.TrimSpace(q.Get("filter")), Back: r.URL.RequestURI()}
+		data := pageData{Repos: rows, Form: newRepoFormView(rows), Org: strings.TrimSpace(q.Get("org")),
+			Filter: strings.TrimSpace(q.Get("filter")), Back: r.URL.RequestURI()}
 		status := http.StatusOK
-		if specs, bad := validateRepos(rows); !edit && len(specs)+len(bad) > 0 {
+		if specs, bad := validateRepos(rows); !edit && (len(specs)+len(bad) > 0 || data.Org != "") {
 			data.Searched = true
 			p, done := jobs.start(r.Header.Get(progressHeader))
-			status = scan(r.Context(), checkout, &data, specs, bad, p)
+			status = scan(r.Context(), checkout, cfg.orgs, &data, specs, bad, p)
 			done()
 			if data.Error == "" && len(data.RepoErrors()) == 0 {
-				recent.add(historyEntry{Repos: data.Repos, Count: data.Total})
+				recent.add(historyEntry{Repos: data.Repos, Org: data.Org, Count: data.Total})
 			}
 			data.Skills = filterSkills(data.Skills, data.Filter)
 			starred.mark(data.Skills)
@@ -260,12 +341,11 @@ func newServeHandler(checkout checkoutFunc, opts ...serveOption) http.Handler {
 // SKILL.md files are quick.
 var mainScan = scanPlan{log: "scan", cloneSteps: 80, discoverSteps: 20, readText: true}
 
-// scan fills data with the skills of the repositories, reporting its stages to
-// p and the log, and returns the HTTP status: an error status only if no
-// repository could be scanned.
-func scan(ctx context.Context, checkout checkoutFunc, data *pageData, specs []repoSpec, bad []repoResult, p *progress) int {
+// scan fills data with the skills of the repositories and of the repositories
+// of data.Org, reporting its stages to p and the log, and returns the HTTP
+// status: an error status only if no repository could be scanned.
+func scan(ctx context.Context, checkout checkoutFunc, orgs *githubOrgs, data *pageData, specs []repoSpec, bad []repoResult, p *progress) int {
 	log := logFrom(ctx)
-	p.setTotal((mainScan.cloneSteps + mainScan.discoverSteps) * len(specs))
 	p.setStage("Validating…")
 	log.Info("scan: validating")
 	if n := len(specs) + len(bad); n > maxRepos {
@@ -275,7 +355,19 @@ func scan(ctx context.Context, checkout checkoutFunc, data *pageData, specs []re
 	}
 	log.Info("scan: repositories parsed", "valid", len(specs), "invalid", len(bad))
 
-	data.Results = append(scanRepos(ctx, checkout, specs, mainScan, p), bad...)
+	plan := mainScan
+	var empty []repoResult
+	if data.Org != "" {
+		var status int
+		specs, empty, status = listOrg(ctx, orgs, data, specs, p)
+		if status != http.StatusOK {
+			return status
+		}
+		plan.timeout = orgScanTimeout
+	}
+	p.setTotal((plan.cloneSteps + plan.discoverSteps) * len(specs))
+
+	data.Results = append(append(scanRepos(ctx, checkout, specs, plan, p), empty...), bad...)
 	for _, res := range data.Results {
 		data.Skills = append(data.Skills, res.skills...)
 		for _, w := range res.warnings {
@@ -294,6 +386,54 @@ func scan(ctx context.Context, checkout checkoutFunc, data *pageData, specs []re
 		return data.Results[0].status
 	}
 	return http.StatusOK
+}
+
+// listOrg adds the repositories of data.Org to specs, skipping those already
+// listed. Empty repositories are not cloned: they are returned as results
+// without skills.
+func listOrg(ctx context.Context, orgs *githubOrgs, data *pageData, specs []repoSpec, p *progress) (_ []repoSpec, empty []repoResult, status int) {
+	log := logFrom(ctx)
+	name, err := orgs.parseOrg(data.Org)
+	if err != nil {
+		log.Info("scan: invalid organization", "error", err.Error())
+		data.Error = err.Error()
+		return nil, nil, http.StatusBadRequest
+	}
+	// The form, links and history show the bare name, whatever was typed.
+	data.Org = name
+	p.setStage(fmt.Sprintf("Listing repositories of %s…", name))
+	log.Info("scan: listing organization", "org", name)
+	start := time.Now()
+	repos, truncated, err := orgs.list(ctx, name)
+	if err != nil {
+		log.Warn("scan: organization listing failed", "org", name, "error", err.Error())
+		data.Error = err.Error()
+		if errors.Is(err, errOrgNotFound) {
+			return nil, nil, http.StatusNotFound
+		}
+		return nil, nil, http.StatusBadGateway
+	}
+	data.OrgTruncated, data.OrgMax = truncated, orgs.max
+
+	seen := map[string]bool{}
+	for _, s := range specs {
+		seen[cacheKey(s.URL, s.Ref)] = true
+	}
+	for _, r := range repos {
+		spec := repoSpec{URL: r.URL}
+		if validateRemote(r.URL) != nil || seen[cacheKey(spec.URL, "")] {
+			continue
+		}
+		seen[cacheKey(spec.URL, "")] = true
+		if r.Size == 0 {
+			empty = append(empty, repoResult{Repo: spec})
+			continue
+		}
+		specs = append(specs, spec)
+	}
+	log.Info("scan: organization listed", "org", name, "repos", len(repos), "empty", len(empty),
+		"truncated", truncated, "duration", time.Since(start).Round(time.Millisecond))
+	return specs, empty, http.StatusOK
 }
 
 func plural(n int) string {
