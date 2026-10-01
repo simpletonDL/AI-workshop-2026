@@ -5,7 +5,7 @@ import { test, expect } from './harness.mjs';
 test.use({ reducedMotion: 'no-preference' });
 
 // Moments (ms since the page load) chosen to show every mode of the seeded run.
-const moments = [0, 1000, 2400, 3000, 4500, 7000, 10000, 14000];
+const moments = [0, 1000, 2400, 3000, 4500, 7000, 10000, 14000, 14750];
 
 test('dancer timeline', async ({ page }) => {
   await page.addInitScript(() => {
