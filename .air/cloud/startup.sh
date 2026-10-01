@@ -21,8 +21,8 @@ if ! command -v make >/dev/null 2>&1; then
   log "installing make into ~/.local"
   tmp=$(mktemp -d)
   (cd "$tmp" && apt-get download make)
+  mkdir -p "$HOME/.local/opt/make" "$HOME/.local/bin"
   dpkg-deb -x "$tmp"/make_*.deb "$HOME/.local/opt/make"
-  mkdir -p "$HOME/.local/bin"
   ln -sf "$HOME/.local/opt/make/usr/bin/make" "$HOME/.local/bin/make"
   rm -rf "$tmp"
 fi
