@@ -34,7 +34,7 @@ Decisions, gotchas, user preferences and history from past sessions; format in `
 2. Do the work. Commit to the branch as you go.
 
 ### CI workflow
-After the local tests (`make test`, `make test-integration`, `make test-ui`) pass:
+After the local tests (`make test`, `make test-integration`, `make test-ui`; without `make`, run the commands from `Makefile`) pass:
 
 1. Commit the changes and push the branch: `git push -u origin HEAD` (you are allowed to do this without asking).
 2. Wait for CI: run `scripts/ci-wait.sh` (Bash timeout 600000 ms, or `run_in_background` and wait for the notification).
@@ -52,7 +52,7 @@ After the local tests (`make test`, `make test-integration`, `make test-ui`) pas
 5. Only report the task as done after CI is green and the PR is open.
 
 If the change is visible in the web UI (`atlas serve`), record a demo and put it into the PR body —
-the `demo` skill (`.claude/skills/demo/SKILL.md`).
+the `demo` skill (`.claude/skills/demo/SKILL.md`). It needs only Docker; if it fails, say so in the PR, don't skip it.
 A web UI change that is intended to look different fails `make test-ui`: look at the diffs in
 `test/ui/out/report`, re-render the baselines with `scripts/ui-test.sh --update`, `Read` the changed PNGs and commit them.
 
