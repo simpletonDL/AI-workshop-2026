@@ -45,14 +45,7 @@ jobs:
           cache: true
 
       - name: UI tests
-        run: scripts/ui-test.sh --update
-
-      - name: Print baselines
-        if: always()
-        run: |
-          echo BASELINES-BEGIN
-          tar -C test/ui -czf - __screenshots__ | base64 -w 4000
-          echo BASELINES-END
+        run: scripts/ui-test.sh
 
       - name: Upload report
         if: failure()
