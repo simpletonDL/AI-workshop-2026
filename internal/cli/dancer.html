@@ -1,5 +1,5 @@
 {{/* Decorative dancing cartoon in the page background, shared by the main page and /cluster.
-     /dancer.js makes him walk, dance and talk; without it he stands in the corner. */}}
+     /dancer.js makes him walk, dance, squat and talk; without it he stands in the corner. */}}
 {{define "dancer-css"}}
   .dancer {
     position: fixed; right: 8px; bottom: 0; width: 150px; z-index: -1;
@@ -48,13 +48,15 @@
     <ellipse class="shadow" cx="100" cy="312" rx="46" ry="6" fill="#000" opacity=".18" />
     <g class="flip">
     <g class="body">
-      <!-- Legs: thigh rotates at the hip, shin at the knee. -->
+      <!-- Legs: thigh rotates at the hip, shin at the knee, shoe at the ankle. -->
       <g class="leg-l">
         <path d="M76 190 h22 l-1 58 h-20 Z" fill="url(#dn-suit)" />
         <g class="shin-l">
           <path d="M77 246 h20 l-1 54 h-18 Z" fill="url(#dn-suit)" />
           <circle cx="87" cy="248" r="10" fill="#1d2640" />
-          <path d="M66 300 C66 292 96 292 97 300 L98 308 C90 311 70 311 62 308 C60 305 62 301 66 300 Z" fill="url(#dn-shoe)" />
+          <g class="foot-l">
+            <path d="M66 300 C66 292 96 292 97 300 L98 308 C90 311 70 311 62 308 C60 305 62 301 66 300 Z" fill="url(#dn-shoe)" />
+          </g>
         </g>
       </g>
       <g class="leg-r">
@@ -62,7 +64,9 @@
         <g class="shin-r">
           <path d="M103 246 h20 l-1 54 h-18 Z" fill="url(#dn-suit)" />
           <circle cx="113" cy="248" r="10" fill="#1d2640" />
-          <path d="M103 300 C104 292 134 292 134 300 C138 301 140 305 138 308 C130 311 110 311 102 308 Z" fill="url(#dn-shoe)" />
+          <g class="foot-r">
+            <path d="M103 300 C104 292 134 292 134 300 C138 301 140 305 138 308 C130 311 110 311 102 308 Z" fill="url(#dn-shoe)" />
+          </g>
         </g>
       </g>
       <g class="upper">
@@ -77,8 +81,10 @@
         </g>
         <!-- The tie is, of course, far too long. -->
         <path d="M94 102 L106 102 L104 114 L96 114 Z" fill="#b3161f" />
-        <path d="M96 114 L104 114 L112 250 L100 262 L88 250 Z" fill="url(#dn-tie)" />
-        <path d="M99 118 L101 118 L103 250" fill="none" stroke="#ff7a84" stroke-width="1" opacity=".6" />
+        <g class="tie">
+          <path d="M96 114 L104 114 L112 250 L100 262 L88 250 Z" fill="url(#dn-tie)" />
+          <path d="M99 118 L101 118 L103 250" fill="none" stroke="#ff7a84" stroke-width="1" opacity=".6" />
+        </g>
         <!-- Arms: upper arm rotates at the shoulder, forearm at the elbow. Tiny hands. -->
         <g class="arm-l">
           <rect x="50" y="104" width="24" height="54" rx="12" fill="url(#dn-suit)" />
