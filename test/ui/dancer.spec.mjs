@@ -21,10 +21,12 @@ test('dancer timeline', async ({ page }) => {
   await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));
   await page.goto('/');
 
-  let now = 0;
+  // The fake clock starts a few real ms after 0 and frames land on a fixed 16 ms grid,
+  // so run to the absolute moments, or a frame near one would be drawn only sometimes.
+  let now = await page.evaluate(() => performance.now());
   for (const at of moments) {
-    await page.clock.runFor(at - now);
-    now = at;
+    await page.clock.runFor(Math.max(0, at - now));
+    now = Math.max(now, at);
     await expect(page).toHaveScreenshot(`t${String(at).padStart(5, '0')}.png`);
   }
 });
