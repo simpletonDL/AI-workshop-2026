@@ -54,6 +54,25 @@ log "starting atlas serve on $SERVE_ADDR (log: $SERVE_LOG)"
 pkill -f "bin/atlas serve --addr $SERVE_ADDR" 2>/dev/null || true
 nohup "$root/bin/atlas" serve --addr "$SERVE_ADDR" >"$SERVE_LOG" 2>&1 &
 
+# Containers (scripts/ui-test.sh runs `npm ci` in one) reach the network only through the environment's
+# proxy: let the Docker client pass it into every container.
+if [ -n "${HTTPS_PROXY:-${https_proxy:-}}" ]; then
+  log "configuring the Docker client proxy (~/.docker/config.json)"
+  mkdir -p "$HOME/.docker"
+  python3 - "$HOME/.docker/config.json" <<'EOF'
+import json, os, sys
+path = sys.argv[1]
+cfg = json.load(open(path)) if os.path.exists(path) else {}
+env = lambda *keys: next((os.environ[k] for k in keys if os.environ.get(k)), "")
+cfg.setdefault("proxies", {})["default"] = {
+    "httpProxy": env("HTTP_PROXY", "http_proxy"),
+    "httpsProxy": env("HTTPS_PROXY", "https_proxy"),
+    "noProxy": env("NO_PROXY", "no_proxy") or "localhost,127.0.0.1,::1",
+}
+json.dump(cfg, open(path, "w"), indent=2)
+EOF
+fi
+
 wait_docker() {
   local n=0
   until docker info >/dev/null 2>&1; do
