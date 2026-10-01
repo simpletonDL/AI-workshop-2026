@@ -12,13 +12,15 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/example/atlas/internal/skills"
 )
 
 // checkout prepares a directory with the repository contents and returns it
 // together with a cleanup function that must always be called.
 //
-// A local directory without ref is scanned in place. Anything else is
-// shallow-cloned into a temporary directory.
+// A local directory without ref is scanned in place. Anything else is cloned
+// into a temporary directory (see gitClone).
 func checkout(ctx context.Context, source, ref string) (dir string, cleanup func(), err error) {
 	noop := func() {}
 
@@ -48,22 +50,48 @@ func checkout(ctx context.Context, source, ref string) (dir string, cleanup func
 	return dest, cleanup, nil
 }
 
+// gitClone fetches only what skill discovery needs: a shallow blobless clone
+// (the commit and its trees) and a sparse checkout of the SKILL.md files, so
+// the contents of other files are never downloaded. A server without partial
+// clone support sends all blobs; the checkout is still sparse.
 func gitClone(ctx context.Context, source, ref, dest string) error {
 	if _, err := exec.LookPath("git"); err != nil {
 		return errors.New("git is not installed or not in PATH")
 	}
 
-	args := []string{"clone", "--progress", "--depth", "1", "--single-branch"}
+	args := []string{"clone", "--progress", "--depth", "1", "--single-branch", "--filter=blob:none", "--no-checkout"}
 	if ref != "" {
 		args = append(args, "--branch", ref)
 	}
 	// "--" prevents a source starting with "-" from being parsed as an option.
 	args = append(args, "--", source, dest)
 
+	report := cloneProgressFrom(ctx)
+	if err := runGit(ctx, "", report, args...); err != nil {
+		return fmt.Errorf("failed to clone %s: %s", source, err)
+	}
+	if report != nil {
+		report(cloneFetched)
+	}
+	// A pattern without a slash matches the file name at any depth.
+	if err := runGit(ctx, dest, nil, "sparse-checkout", "set", "--no-cone", skills.FileName); err != nil {
+		return fmt.Errorf("failed to check out %s: %s", source, err)
+	}
+	// Downloads the blobs of the SKILL.md files in one batch.
+	if err := runGit(ctx, dest, report, "checkout", "--progress"); err != nil {
+		return fmt.Errorf("failed to check out %s: %s", source, err)
+	}
+	return nil
+}
+
+// runGit runs git in dir, sending progress to report. The error is git's
+// message without the progress chatter.
+func runGit(ctx context.Context, dir string, report func(int), args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
 	// Fail instead of hanging on credential prompts.
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	stderr := &cloneStderr{report: cloneProgressFrom(ctx)}
+	stderr := &cloneStderr{report: report}
 	cmd.Stderr = stderr
 
 	err := cmd.Run()
@@ -73,7 +101,7 @@ func gitClone(ctx context.Context, source, ref, dest string) error {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return fmt.Errorf("failed to clone %s: %s", source, msg)
+		return errors.New(msg)
 	}
 	return nil
 }
@@ -95,20 +123,24 @@ func cloneProgressFrom(ctx context.Context) func(int) {
 	return nil
 }
 
-// clonePhases maps local phases of `git clone --progress` to a share of the
-// whole clone: [from, to) percent. Remote phases (counting, compressing) are
-// short and not reported.
+// clonePhases maps local progress phases of git clone and checkout to a share
+// of the whole clone: [from, to) percent. Remote phases (counting,
+// compressing) are short and not reported.
 var clonePhases = map[string][2]int{
-	"Receiving objects": {0, 80},
-	"Resolving deltas":  {80, 95},
-	"Updating files":    {95, 100},
+	"Receiving objects": {0, 50},
+	"Resolving deltas":  {50, cloneFetched},
+	"Updating files":    {cloneFetched, 100},
 }
+
+// cloneFetched is the share of a clone done when the trees are fetched; the
+// checkout of the SKILL.md files is the rest.
+const cloneFetched = 60
 
 var (
 	// cloneProgressLine is a progress line, e.g. "Receiving objects:  45% (4/9), 1 MiB | 2 MiB/s".
 	cloneProgressLine = regexp.MustCompile(`^(?:remote: )?([A-Za-z ]+): +(\d+)% \(\d+/\d+\)`)
 	// cloneNoise is other chatter that is not part of an error message.
-	cloneNoise = regexp.MustCompile(`^(?:Cloning into |remote: (?:Enumerating objects:|Total ))`)
+	cloneNoise = regexp.MustCompile(`^(?:Cloning into |warning: filtering not recognized by server|remote: (?:Enumerating objects:|Total ))`)
 )
 
 // cloneStderr parses the stderr of `git clone --progress`: progress lines go

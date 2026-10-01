@@ -45,7 +45,14 @@ type serveOption func(*serveConfig)
 type serveConfig struct {
 	claude        claudeRunner
 	claudeTimeout time.Duration
+	orgs          *githubOrgs
 	log           *slog.Logger
+}
+
+// withGitHub sets the lister of organization repositories used by the main
+// page.
+func withGitHub(orgs *githubOrgs) serveOption {
+	return func(c *serveConfig) { c.orgs = orgs }
 }
 
 // withLogger sets the logger of the web service. Without it nothing is
@@ -65,7 +72,12 @@ func withClaude(run claudeRunner, timeout time.Duration) serveOption {
 }
 
 func newServeConfig(opts []serveOption) serveConfig {
+	orgs, err := newGitHubOrgs(defaultGitHubAPI, "", defaultOrgMaxRepos, defaultCacheTTL)
+	if err != nil {
+		panic(err)
+	}
 	cfg := serveConfig{
+		orgs:          orgs,
 		claude:        claudeCLI("claude"),
 		claudeTimeout: defaultClaudeTimeout,
 		log:           slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -318,14 +330,23 @@ func clusterRepos(ctx context.Context, checkout checkoutFunc, cfg serveConfig, d
 type scanPlan struct {
 	log           string // prefix of the log messages: "scan" or "cluster"
 	cloneSteps    int
-	discoverSteps int  // discovery and, with readText, reading the SKILL.md files
-	readText      bool // also read the text of every SKILL.md
+	discoverSteps int           // discovery and, with readText, reading the SKILL.md files
+	readText      bool          // also read the text of every SKILL.md
+	timeout       time.Duration // of the whole scan; scanTimeout if zero
 }
 
-// scanRepos clones and scans the repositories in parallel, keeping their
-// order. Each repository adds plan.cloneSteps+plan.discoverSteps to p.
+// maxParallelClones bounds how many repositories one request clones at once.
+const maxParallelClones = 16
+
+// scanRepos clones and scans the repositories in parallel (at most
+// maxParallelClones at a time), keeping their order. Each repository adds
+// plan.cloneSteps+plan.discoverSteps to p.
 func scanRepos(ctx context.Context, checkout checkoutFunc, specs []repoSpec, plan scanPlan, p *progress) []repoResult {
-	ctx, cancel := context.WithTimeout(ctx, scanTimeout)
+	timeout := plan.timeout
+	if timeout == 0 {
+		timeout = scanTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	log := logFrom(ctx)
 
@@ -353,11 +374,14 @@ func scanRepos(ctx context.Context, checkout checkoutFunc, specs []repoSpec, pla
 	}
 
 	results := make([]repoResult, len(specs))
+	slots := make(chan struct{}, maxParallelClones)
 	var wg sync.WaitGroup
 	for i, spec := range specs {
 		wg.Add(1)
 		go func(i int, spec repoSpec) {
 			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
 			repo := redactRepo(spec.URL)
 			log := log.With("repo", repo, "ref", spec.Ref)
 			log.Info(plan.log + ": cloning")

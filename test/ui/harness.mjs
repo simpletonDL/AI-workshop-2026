@@ -36,8 +36,26 @@ function makeRepos(root) {
   }
 }
 
-// Smart HTTP git server (git http-backend as CGI). hold(name) keeps the requests
-// for that repository waiting until the returned function (or releaseAll) is called.
+// A fake GitHub API on the same server (`--github-api <git server>/api`): the
+// organization "fixtures" owns alpha, beta and an empty repository.
+const fakeOrgs = {
+  fixtures: [
+    { html_url: repo('alpha'), size: 10 },
+    { html_url: repo('beta'), size: 10 },
+    { html_url: repo('empty'), size: 0 },
+  ],
+};
+
+function serveGitHubAPI(url, res) {
+  const org = url.pathname.match(/^\/api\/users\/([^/]+)\/repos$/)?.[1];
+  res.setHeader('Content-Type', 'application/json');
+  if (!fakeOrgs[org]) return void res.writeHead(404).end('{"message":"Not Found"}');
+  res.end(JSON.stringify(fakeOrgs[org]));
+}
+
+// Smart HTTP git server (git http-backend as CGI) plus the fake GitHub API.
+// hold(name) keeps the requests for that repository (or "api") waiting until
+// the returned function (or releaseAll) is called.
 async function startGitServer() {
   const root = mkdtempSync(join(tmpdir(), 'atlas-ui-git-'));
   makeRepos(root);
@@ -46,6 +64,7 @@ async function startGitServer() {
     const url = new URL(req.url, 'http://git');
     const name = url.pathname.split('/')[1]?.replace(/\.git$/, '');
     await gates.get(name)?.promise;
+    if (name === 'api') return serveGitHubAPI(url, res);
     const cgi = spawn('git', ['http-backend'], {
       env: {
         ...process.env,
@@ -98,7 +117,8 @@ async function startGitServer() {
 // Starts `atlas serve` on a free port with an empty cache and history.
 async function startAtlas() {
   const cache = mkdtempSync(join(tmpdir(), 'atlas-ui-cache-'));
-  const proc = spawn(atlasBin, ['serve', '--addr', '127.0.0.1:0', '--cache-dir', cache, '--claude-bin', fakeClaude],
+  const proc = spawn(atlasBin, ['serve', '--addr', '127.0.0.1:0', '--cache-dir', cache, '--claude-bin', fakeClaude,
+    '--github-api', `http://127.0.0.1:${gitPort}/api`],
     { stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   proc.stderr.on('data', (d) => { log += d; });

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,7 @@ func TestCloneStderr(t *testing.T) {
 	var got []int
 	c := &cloneStderr{report: func(p int) { got = append(got, p) }}
 	out := "Cloning into 'repo'...\n" +
+		"warning: filtering not recognized by server, ignoring\n" +
 		"remote: Enumerating objects: 9, done.        \n" +
 		"remote: Counting objects:  50% (4/9)        \rremote: Counting objects: 100% (9/9), done.        \n" +
 		"remote: Total 9 (delta 1), reused 0 (delta 0)        \n" +
@@ -29,7 +31,7 @@ func TestCloneStderr(t *testing.T) {
 		out = out[n:]
 	}
 	c.flush()
-	if want := []int{0, 40, 80, 95, 97}; !reflect.DeepEqual(got, want) {
+	if want := []int{0, 25, 50, 60, 76}; !reflect.DeepEqual(got, want) {
 		t.Errorf("reported %v, want %v", got, want)
 	}
 	if msg := c.msg.String(); msg != "warning: something odd\nfatal: early EOF\n" {
@@ -43,6 +45,9 @@ func TestGitCloneReportsProgress(t *testing.T) {
 	}
 	src := t.TempDir()
 	writeSkill(t, src, "skills/deploy", "---\nname: deploy\ndescription: Deploy\n---\n")
+	if err := os.WriteFile(filepath.Join(src, "skills/deploy/script.sh"), []byte("echo hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	for _, args := range [][]string{
 		{"init", "-q"}, {"add", "."},
 		{"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"},
@@ -55,11 +60,19 @@ func TestGitCloneReportsProgress(t *testing.T) {
 	}
 	last := -1
 	ctx := withCloneProgress(context.Background(), func(p int) { last = p })
-	if err := gitClone(ctx, "file://"+filepath.ToSlash(src), "", filepath.Join(t.TempDir(), "repo")); err != nil {
+	dest := filepath.Join(t.TempDir(), "repo")
+	if err := gitClone(ctx, "file://"+filepath.ToSlash(src), "", dest); err != nil {
 		t.Fatal(err)
 	}
-	if last < 80 {
-		t.Errorf("last reported progress = %d, want at least 80 (objects received)", last)
+	if last < cloneFetched {
+		t.Errorf("last reported progress = %d, want at least %d (trees fetched)", last, cloneFetched)
+	}
+	// Only the SKILL.md files are checked out.
+	if _, err := os.Stat(filepath.Join(dest, "skills/deploy/SKILL.md")); err != nil {
+		t.Errorf("SKILL.md not checked out: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "skills/deploy/script.sh")); !os.IsNotExist(err) {
+		t.Errorf("script.sh checked out (err = %v), want a sparse checkout of SKILL.md files", err)
 	}
 
 	err := gitClone(context.Background(), "file://"+filepath.ToSlash(filepath.Join(src, "missing")), "", filepath.Join(t.TempDir(), "repo"))
